@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from models.spatial_gcn import Spatial_GCN_Layer
 from models.temporal_brain import Temporal_Brain_Layer
@@ -10,13 +11,13 @@ from utils.dataset import NTUSkeletonDataset
 # =====================
 # 1. HYPERPARAMETERS
 # =====================
-DATA_DIR = '/data/raw_skeletons/nturgb+d_skeletons_s001_to_s017' #CHANGE THIS DIRECTORY!!!
+DATA_DIR = '/data/train_skeletons' #CHANGE THIS DIRECTORY!!!
 BATCH_SIZE = 16
 EPOCHS = 50
 LEARNING_RATE = 0.001
 NUM_CLASSES = 60
 
-device = torch.device("cuda" if torch.cude.is_available() else 'cpu')
+device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
 print(f'Device Type: {device.type.upper()}')
 
 # =====================
@@ -46,16 +47,22 @@ optimizer = optim.Adam(
 # =====================
 print("Start Training..")
 
+gcn.train()
+transformer.train()
+classifier.train()
+
 for epoch in range(EPOCHS):
     total_loss = 0.0
     correct_predictions = 0
     total_samples = 0
+    loop = tqdm(dataloader, total=len(dataloader), leave=True, desc=f"Epoch [{epoch+1}/{EPOCHS}]")
 
-    for batch_idx, batched_data in enumerate(dataset):
+    for batch_idx, (batched_data,labels) in enumerate(loop):
         # batched_data shape: (Batch, Time=100, Bodies=2, Joints=25, Channels=3)
         # Note: We need fake labels for this script to run. In your real dataset, 
         # you will extract the actual label from the filename (e.g., A060 = class 59)
-        labels = torch.randint(0, NUM_CLASSES, (batched_data.shape[0],)).to(device)
+        batched_data = batched_data.to(device)
+        labels = labels.to(device)
 
         B, T, M, V, C = batched_data.shape
         gcn_input = batched_data.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C).to(device)
@@ -94,9 +101,18 @@ for epoch in range(EPOCHS):
         correct_predictions += (predicted_classes == labels).sum().item()
         total_samples += labels.size(0)
 
+        loop.set_postfix(loss=loss.item())
+
     # Print Epoch Report
         epoch_accuracy = (correct_predictions / total_samples) * 100
         print(f"Epoch [{epoch+1}/{EPOCHS}] | Loss: {total_loss/len(dataloader):.4f} | Accuracy: {epoch_accuracy:.2f}%")
+    
+    # Save weights every 10 epochs
+    if (epoch + 1) % 10 == 0:
+        torch.save(gcn.state_dict(), f'gcn_epoch_{epoch+1}.pth')
+        torch.save(transformer.state_dict(), f'transformer_epoch_{epoch+1}.pth')
+        torch.save(classifier.state_dict(), f'classifier_epoch_{epoch+1}.pth')
+        print(f"-> Checkpoint saved for Epoch {epoch+1}")
 
 print("Training Complete!")
 

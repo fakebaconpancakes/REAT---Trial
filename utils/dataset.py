@@ -12,7 +12,7 @@ class NTUSkeletonDataset(Dataset):
     def __len__(self):
         return len(self.file_list)
 
-    def parse_single_skeleton(file_path):
+    def parse_single_skeleton(self,file_path):
         with open(file_path, 'r') as f:
             datas = f.readlines()
         
@@ -43,7 +43,12 @@ class NTUSkeletonDataset(Dataset):
         return skeleton_tensor
     
     def __getitem__(self, idx):
-        file_path = os.path.join(self.data_folder, self.file_list[idx])
+        file_name = self.file_list[idx]
+        file_path = os.path.join(self.data_folder, file_name)
+
+        action_string = file_name.split('A')[1][:3]
+        action_string = int(action_string) - 1
+
         raw_numpy = self.parse_single_skeleton(file_path)
 
         actual_frames = raw_numpy.shape[0]
@@ -52,7 +57,6 @@ class NTUSkeletonDataset(Dataset):
         if actual_frames <= self.max_frames:
             standardized_tensor[:actual_frames, :, :, :] = raw_numpy
         else:
-            standardized_tensor = raw_numpy[:,self.max_frames, :, :, :]
-
-        return torch.tensor(standardized_tensor, dtype=torch.float32)
-
+            standardized_tensor = raw_numpy[:self.max_frames, :, :, :]
+            
+        return torch.tensor(standardized_tensor, dtype=torch.float32), torch.tensor(action_label, dtype=torch.long)

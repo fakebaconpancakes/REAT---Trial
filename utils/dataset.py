@@ -47,7 +47,7 @@ class NTUSkeletonDataset(Dataset):
         file_path = os.path.join(self.data_folder, file_name)
 
         action_string = file_name.split('A')[1][:3]
-        action_string = int(action_string) - 1
+        action_label = int(action_string) - 1
 
         raw_numpy = self.parse_single_skeleton(file_path)
 
@@ -58,5 +58,5 @@ class NTUSkeletonDataset(Dataset):
             standardized_tensor[:actual_frames, :, :, :] = raw_numpy
         else:
             standardized_tensor = raw_numpy[:self.max_frames, :, :, :]
-            
+
         return torch.tensor(standardized_tensor, dtype=torch.float32), torch.tensor(action_label, dtype=torch.long)

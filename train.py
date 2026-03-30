@@ -11,7 +11,7 @@ from utils.dataset import NTUSkeletonDataset
 # =====================
 # 1. HYPERPARAMETERS
 # =====================
-DATA_DIR = '/data/train_skeletons' #CHANGE THIS DIRECTORY!!!
+DATA_DIR = 'data/train_skeletons' #CHANGE THIS DIRECTORY!!!
 BATCH_SIZE = 16
 EPOCHS = 50
 LEARNING_RATE = 0.001

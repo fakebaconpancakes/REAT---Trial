@@ -26,7 +26,7 @@ print(f'Device Type: {device.type.upper()}')
 # =====================
 print("Loading Dataset..")
 dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
 
 # The Neural Networks
 gcn = Spatial_GCN_Layer().to(device)
@@ -114,6 +114,7 @@ for epoch in range(EPOCHS):
         torch.save(gcn.state_dict(), f'saved_weights/gcn_epoch_{epoch+1}.pth')
         torch.save(transformer.state_dict(), f'saved_weights/transformer_epoch_{epoch+1}.pth')
         torch.save(classifier.state_dict(), f'saved_weights/classifier_epoch_{epoch+1}.pth')
+        torch.save(global_node, f'saved_weights/global_node_epoch_{epoch+1}.pt')
         print(f"-> Checkpoint saved for Epoch {epoch+1}")
 
 print("Training Complete!")

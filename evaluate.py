@@ -21,12 +21,12 @@ NUM_CLASSES = 60
 
 print("Loading Data..")
 val_dataset = NTUSkeletonDataset(data_folder=VAL_DIR,max_frames=100)
-val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
 # 3. Model
 gcn = Spatial_GCN_Layer().to(device)
 transformer = Temporal_Brain_Layer().to(device)
-global_node = nn.Parameter(torch.randn(1, 1, 1, 64, device=device))
+global_node = torch.load('saved_weights/global_node_epoch_50.pt').to(device)
 classifier = nn.Linear(64, NUM_CLASSES).to(device)
 
 gcn.load_state_dict(torch.load('saved_weights/gcn_epoch_50.pth'))
@@ -80,7 +80,7 @@ with torch.no_grad():
         if not saved_xai:
             print("Extracting Glass-Box XAI Heatmap for Sample 1...")
             xai_data = real_attention_matrix[0].cpu().numpy()
-            heat_scores =extract_xai_red_dots(xai_data)
+            heat_scores = extract_xai_red_dots(xai_data)
             np.save("extracted_xai_heatmap.npy", heat_scores)
             saved_xai = True
 

@@ -26,12 +26,12 @@ val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, n
 # 3. Model
 gcn = Spatial_GCN_Layer().to(device)
 transformer = Temporal_Brain_Layer().to(device)
-global_node = torch.load('saved_weights/global_node_epoch_50.pt').to(device)
 classifier = nn.Linear(64, NUM_CLASSES).to(device)
 
-gcn.load_state_dict(torch.load('saved_weights/gcn_epoch_50.pth'))
-transformer.load_state_dict(torch.load('saved_weights/transformer_epoch_50.pth'))
-classifier.load_state_dict(torch.load('saved_weights/classifier_epoch_50.pth'))
+gcn.load_state_dict(torch.load('saved_weights/gcn_epoch_50.pth', map_location=device, weights_only=True))
+transformer.load_state_dict(torch.load('saved_weights/transformer_epoch_50.pth', map_location=device, weights_only=True))
+classifier.load_state_dict(torch.load('saved_weights/classifier_epoch_50.pth', map_location=device, weights_only=True))
+global_node = transformer.global_node  # nn.Parameter saved inside transformer's state_dict
 
 gcn.eval()
 transformer.eval()

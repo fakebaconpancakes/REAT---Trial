@@ -26,12 +26,12 @@ print(f'Device Type: {device.type.upper()}')
 # =====================
 print("Loading Dataset..")
 dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True)
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True)
 
 # The Neural Networks
 gcn = Spatial_GCN_Layer().to(device)
 transformer = Temporal_Brain_Layer().to(device)
-global_node = nn.Parameter(torch.randn(1, 1, 1, 64, device=device))
+global_node = transformer.global_node
 
 # The Classifier
 classifier = nn.Linear(64, NUM_CLASSES).to(device)
@@ -39,7 +39,7 @@ classifier = nn.Linear(64, NUM_CLASSES).to(device)
 # Loss and Optimizer
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(
-    list(gcn.parameters()) + list(transformer.parameters()) + [global_node] + list(classifier.parameters()),
+    list(gcn.parameters()) + list(transformer.parameters()) + list(classifier.parameters()),
     lr = LEARNING_RATE
 )
 
@@ -79,8 +79,9 @@ for epoch in range(EPOCHS):
         # 3. Forward Pass (Transformer)
         attn_output = transformer(transformer_input) # Output: (Batch*2, 64)
 
-        # 4. Global Node (index 25) thought at the VERY LAST frame (index -1)
-        final_video_features = attn_output[:, :, 25, :] # Output: (Batch*2, 64)
+        # 4. Global Node (index 25) thought at the global average
+        global_node_features = attn_output[:, :, 25, :] # Extract the sequence: (Batch*2, Time, 64)
+        final_video_features = torch.mean(global_node_features, dim=1)
 
         separated_bodies = final_video_features.view(B, M, 64)
         # Compress them by taking the strongest signal between Person 1 and Person 2
@@ -114,7 +115,6 @@ for epoch in range(EPOCHS):
         torch.save(gcn.state_dict(), f'saved_weights/gcn_epoch_{epoch+1}.pth')
         torch.save(transformer.state_dict(), f'saved_weights/transformer_epoch_{epoch+1}.pth')
         torch.save(classifier.state_dict(), f'saved_weights/classifier_epoch_{epoch+1}.pth')
-        torch.save(global_node, f'saved_weights/global_node_epoch_{epoch+1}.pt')
         print(f"-> Checkpoint saved for Epoch {epoch+1}")
 
 print("Training Complete!")

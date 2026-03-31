@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 class NTUSkeletonDataset(Dataset):
     def __init__(self, data_folder, max_frames=100):
         self.data_folder = data_folder
-        self.file_list = [f for f in os.listdir(data_folder) if f.endswith('.skeleton')]
+        self.file_list = sorted([f for f in os.listdir(data_folder) if f.endswith('.skeleton')])
         self.max_frames = max_frames
 
     def __len__(self):
@@ -44,12 +44,15 @@ class NTUSkeletonDataset(Dataset):
     
     def __getitem__(self, idx):
         file_name = self.file_list[idx]
-        file_path = os.path.join(self.data_folder, file_name)
+
+        pt_file_name = file_name.replace('.skeleton','.pt')
+        file_path = os.path.join(self.data_folder, pt_file_name)
 
         action_string = file_name.split('A')[1][:3]
         action_label = int(action_string) - 1
 
-        raw_numpy = self.parse_single_skeleton(file_path)
+        raw_tensor = torch.load(file_path, weights_only=True)
+        raw_numpy = raw_tensor.numpy()
 
         actual_frames = raw_numpy.shape[0]
         standardized_tensor = np.zeros((self.max_frames, 2, 25, 3), dtype=np.float32)

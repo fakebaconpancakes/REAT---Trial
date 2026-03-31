@@ -8,6 +8,7 @@ class Temporal_Brain_Layer(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
+        self.global_node = nn.Parameter(torch.randn(1, 1, 1, embed_dim))
         
         # Standard projections for Queries, Keys, and Values
         self.qkv_proj = nn.Linear(embed_dim, embed_dim * 3)
@@ -23,8 +24,20 @@ class Temporal_Brain_Layer(nn.Module):
         self.register_buffer('room_map', torch.tensor(room_mapping, dtype=torch.int32))
         
         # The Global Node is the 26th token (index 25)
-        self.global_node_idx = 25 
+        self.global_node_idx = 25
         self.compiled_self_attention = torch.compile(flex_attention)
+
+        # Pre-build the static block mask once at init.
+        # B=None tells flex_attention the mask applies to any batch size (no B=1 broadcast risk).
+        # S=26 is fixed (25 joints + 1 global node), so this is safe to cache.
+        room_map_ref = self.room_map
+        global_node_idx_ref = self.global_node_idx
+        def _static_mask_rule(b, h, q_idx, kv_idx):
+            is_global_q  = (q_idx == global_node_idx_ref)
+            is_global_kv = (kv_idx == global_node_idx_ref)
+            same_room = (q_idx < 25) & (kv_idx < 25) & (room_map_ref[q_idx] == room_map_ref[kv_idx])
+            return is_global_q | is_global_kv | same_room
+        self._cached_block_mask = create_block_mask(_static_mask_rule, B=None, H=num_heads, Q_LEN=26, KV_LEN=26)
 
 
     def forward(self, x, return_attention=False):
@@ -38,24 +51,7 @@ class Temporal_Brain_Layer(nn.Module):
             B, S, E = original_shape
             T = 1
 
-        local_room_map = self.room_map
-        local_global_node_idx = self.global_node_idx
-
-        # 2. The FlexAttention Masking Rule
-        # This function tells the hardware exactly which tokens are allowed to communicate
-        def anatomical_mask_rule(b, h, q_idx, kv_idx):
-            # b = batch, h = head, q_idx = "Who is looking", kv_idx = "Who is being looked at"
-            
-            # Rule A: The Project Manager. If either token is the Global Node, ALLOW connection.
-            is_global_q = (q_idx == local_global_node_idx)
-            is_global_kv = (kv_idx == local_global_node_idx)
-            
-            # Rule B: The Soundproof Rooms. Do they share the same room ID?
-            # We add a safety check (< 25) to avoid indexing out of bounds for the global node
-            same_room = (q_idx < 25) & (kv_idx < 25) & (local_room_map[q_idx] == local_room_map[kv_idx])
-            
-            # Final Verdict: Allow connection if it's the global node, OR if they are in the same room.
-            return is_global_q | is_global_kv | same_room
+        # 2. The FlexAttention Masking Rule is pre-compiled at __init__ (see self._cached_block_mask)
         
         # 1. Generate Queries, Keys, and Values
         qkv = self.qkv_proj(x)
@@ -65,10 +61,10 @@ class Temporal_Brain_Layer(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        # 3. Compile the Hardware-Sparse Mask!
-        # This is where the Triton compiler writes the custom instruction for the RTX 3090
-        block_mask = create_block_mask(anatomical_mask_rule, 1, self.num_heads, S, S)
-        
+        # 3. Use the pre-compiled static block mask (cached at __init__ time)
+        # This avoids redefining the closure and Triton recompiling on every forward pass
+        block_mask = self._cached_block_mask
+
         # 4. Execute FlexAttention
         # The GPU will physically skip computing the O(N^2) empty space
         attn_output = self.compiled_self_attention(q, k, v, block_mask=block_mask)
@@ -83,8 +79,8 @@ class Temporal_Brain_Layer(nn.Module):
             d_k = q.size(-1)
             raw_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)
             
-            # Convert the Triton hardware mask into a normal PyTorch boolean mask
-            dense_mask = block_mask.to_dense()
+            # Convert the cached Triton hardware mask into a normal PyTorch boolean mask
+            dense_mask = self._cached_block_mask.to_dense()
             
             # Mask out the forbidden rooms with -infinity so Softmax turns them into 0%
             raw_scores = raw_scores.masked_fill(~dense_mask, float('-inf'))

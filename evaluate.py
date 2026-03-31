@@ -62,7 +62,9 @@ with torch.no_grad():
 
         attn_output, real_attention_matrix = transformer(transformer_input, return_attention=True)
         
-        final_video_features = attn_output[:, -1, 25, :] 
+        global_node_features = attn_output[:, :, 25, :] 
+        final_video_features = torch.mean(global_node_features, dim=1)
+
         separated_bodies = final_video_features.view(B, M, 64)
         video_representation, _ = torch.max(separated_bodies, dim=1) 
         

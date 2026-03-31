@@ -80,7 +80,7 @@ for epoch in range(EPOCHS):
         attn_output = transformer(transformer_input) # Output: (Batch*2, 64)
 
         # 4. Global Node (index 25) thought at the VERY LAST frame (index -1)
-        final_video_features = attn_output[:, -1, 25, :] # Output: (Batch*2, 64)
+        final_video_features = attn_output[:, :, 25, :] # Output: (Batch*2, 64)
 
         separated_bodies = final_video_features.view(B, M, 64)
         # Compress them by taking the strongest signal between Person 1 and Person 2

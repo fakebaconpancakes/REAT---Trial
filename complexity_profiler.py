@@ -35,6 +35,23 @@ transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
 print("(2) Profile Temporal Brain...")
 tf_macs, tf_params = profile(transformer, inputs=(transformer_input, False), verbose=False)
 
+# ==========================================
+# 🚨 MANUAL FLEX_ATTENTION MACS CORRECTION 🚨
+# ==========================================
+# thop ignores the functional flex_attention call, so we calculate its MACs manually.
+# Your notebook confirmed your mask has 180 active connections.
+active_connections = 180 
+batch_size = B * M  # 2 bodies
+time_steps = T      # 100 frames
+embed_dim = 64
+
+# Math: (Q * K^T MACs) + (Attn * V MACs) = 2 * active_connections * embed_dim
+flex_attn_macs = batch_size * time_steps * 2 * active_connections * embed_dim
+
+# Add the missing math back into the Transformer's total
+tf_macs += flex_attn_macs
+# ==========================================
+
 # 5. Profile the Classifier
 with torch.no_grad():
     attn_output = transformer(transformer_input)

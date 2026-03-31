@@ -30,6 +30,9 @@ global_node = nn.Parameter(torch.randn(1, 1, 1, 64, device=device))
 classifier = nn.Linear(64, NUM_CLASSES).to(device)
 
 gcn.load_state_dict(torch.load('saved_weights/gcn_epoch_50.pth'))
+transformer.load_state_dict(torch.load('saved_weights/transformer_epoch_50.pth'))
+classifier.load_state_dict(torch.load('saved_weights/classifier_epoch_50.pth'))
+
 gcn.eval()
 transformer.eval()
 classifier.eval()

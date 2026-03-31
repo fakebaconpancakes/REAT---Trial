@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import os
 
 from models.spatial_gcn import Spatial_GCN_Layer
 from models.temporal_brain import Temporal_Brain_Layer
@@ -104,14 +105,15 @@ for epoch in range(EPOCHS):
         loop.set_postfix(loss=loss.item())
 
     # Print Epoch Report
-        epoch_accuracy = (correct_predictions / total_samples) * 100
-        print(f"Epoch [{epoch+1}/{EPOCHS}] | Loss: {total_loss/len(dataloader):.4f} | Accuracy: {epoch_accuracy:.2f}%")
+    epoch_accuracy = (correct_predictions / total_samples) * 100
+    print(f"Epoch [{epoch+1}/{EPOCHS}] | Loss: {total_loss/len(dataloader):.4f} | Accuracy: {epoch_accuracy:.2f}%")
     
     # Save weights every 10 epochs
     if (epoch + 1) % 10 == 0:
-        torch.save(gcn.state_dict(), f'gcn_epoch_{epoch+1}.pth')
-        torch.save(transformer.state_dict(), f'transformer_epoch_{epoch+1}.pth')
-        torch.save(classifier.state_dict(), f'classifier_epoch_{epoch+1}.pth')
+        os.makedirs('saved_weights', exist_ok=True)
+        torch.save(gcn.state_dict(), f'saved_weights/gcn_epoch_{epoch+1}.pth')
+        torch.save(transformer.state_dict(), f'saved_weights/transformer_epoch_{epoch+1}.pth')
+        torch.save(classifier.state_dict(), f'saved_weights/classifier_epoch_{epoch+1}.pth')
         print(f"-> Checkpoint saved for Epoch {epoch+1}")
 
 print("Training Complete!")

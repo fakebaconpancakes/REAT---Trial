@@ -42,11 +42,18 @@ def parse_single_skeleton(file_path):
                     skeleton_tensor[frame, body, joint, :] = [float(jointinfo[0]), float(jointinfo[1]), float(jointinfo[2])]
     return skeleton_tensor
 
-# --- CHANGE THESE PATHS WHEN YOU RUN IT ---
-# Point this to the raw skeleton file you evaluated
-SKELETON_FILE = 'data/val_skeletons/S001C001P001R001A010.skeleton' 
-# Point this to the heatmap file you copied from the workstation
-HEATMAP_FILE = 'extracted_xai_heatmap.npy' 
+# --- AUTO-DETECTED: reads the skeleton path written by evaluate.py ---
+HEATMAP_FILE  = 'extracted_xai_heatmap.npy'
+SOURCE_FILE   = 'extracted_xai_source.txt'
+
+try:
+    with open(SOURCE_FILE, 'r') as f:
+        SKELETON_FILE = f.read().strip()
+    print(f"Using skeleton: {SKELETON_FILE}")
+except FileNotFoundError:
+    # Fallback: manually set the path if evaluate.py hasn't been run yet
+    SKELETON_FILE = 'data/val_skeletons/S001C001P001R001A010.skeleton'
+    print(f"[WARN] {SOURCE_FILE} not found — using fallback: {SKELETON_FILE}")
 
 try:
     raw_data = parse_single_skeleton(SKELETON_FILE)

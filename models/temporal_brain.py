@@ -30,14 +30,18 @@ class Temporal_Brain_Layer(nn.Module):
         # Pre-build the static block mask once at init.
         # B=None tells flex_attention the mask applies to any batch size (no B=1 broadcast risk).
         # S=26 is fixed (25 joints + 1 global node), so this is safe to cache.
-        room_map_ref = self.room_map
+        # Store the mask rule — the actual BlockMask is built lazily on the
+        # first forward() call so it is always on the same device as x.
+        self._num_heads = num_heads
+        self._cached_block_mask = None   # built on first forward pass
+
         global_node_idx_ref = self.global_node_idx
         def _static_mask_rule(b, h, q_idx, kv_idx):
             is_global_q  = (q_idx == global_node_idx_ref)
             is_global_kv = (kv_idx == global_node_idx_ref)
-            same_room = (q_idx < 25) & (kv_idx < 25) & (room_map_ref[q_idx] == room_map_ref[kv_idx])
+            same_room = (q_idx < 25) & (kv_idx < 25) & (self.room_map[q_idx] == self.room_map[kv_idx])
             return is_global_q | is_global_kv | same_room
-        self._cached_block_mask = create_block_mask(_static_mask_rule, B=None, H=num_heads, Q_LEN=26, KV_LEN=26)
+        self._mask_rule = _static_mask_rule
 
 
     def forward(self, x, return_attention=False):
@@ -51,7 +55,7 @@ class Temporal_Brain_Layer(nn.Module):
             B, S, E = original_shape
             T = 1
 
-        # 2. The FlexAttention Masking Rule is pre-compiled at __init__ (see self._cached_block_mask)
+        # The FlexAttention block mask is built lazily on the first forward pass (see lines 71-75).
         
         # 1. Generate Queries, Keys, and Values
         qkv = self.qkv_proj(x)
@@ -61,8 +65,14 @@ class Temporal_Brain_Layer(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        # 3. Use the pre-compiled static block mask (cached at __init__ time)
-        # This avoids redefining the closure and Triton recompiling on every forward pass
+        # 3. Build the block mask on first forward pass (lazy init).
+        # This guarantees the mask is on the same device as x (room_map is a
+        # registered buffer, so it was already moved by .to(device) before here).
+        if self._cached_block_mask is None:
+            self._cached_block_mask = create_block_mask(
+                self._mask_rule, B=None, H=self._num_heads, Q_LEN=26, KV_LEN=26,
+                device=x.device
+            )
         block_mask = self._cached_block_mask
 
         # 4. Execute FlexAttention

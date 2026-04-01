@@ -72,7 +72,9 @@ with torch.no_grad():
         
         # Calculate Accuracy
         _, predicted_classes = torch.max(predictions, 1)
-        correct_predictions += (predicted_classes == labels).sum().item()
+        predicted_classes = predicted_classes.view(-1)  # ensure 1-D tensor
+        labels = labels.long().view(-1)                 # ensure 1-D long tensor
+        correct_predictions += torch.eq(predicted_classes, labels).sum().item()
         total_samples += labels.size(0)
 
         current_acc = (correct_predictions / total_samples)*100
@@ -84,6 +86,10 @@ with torch.no_grad():
             xai_data = real_attention_matrix[0].cpu().numpy()
             heat_scores = extract_xai_red_dots(xai_data)
             np.save("extracted_xai_heatmap.npy", heat_scores)
+            # Save the matching skeleton filename so visualization_gif.py loads the right file
+            first_skeleton_file = val_dataset.file_list[0]
+            with open("extracted_xai_source.txt", "w") as f:
+                f.write(f"{VAL_DIR}/{first_skeleton_file}")
             saved_xai = True
 
 # 4. Final Report

@@ -93,7 +93,7 @@ class Temporal_Brain_Layer(nn.Module):
             dense_mask = self._cached_block_mask.to_dense()
             
             # Mask out the forbidden rooms with -infinity so Softmax turns them into 0%
-            raw_scores = raw_scores.masked_fill(~dense_mask, float('-inf'))
+            raw_scores = raw_scores.masked_fill(~dense_mask.bool(), float('-inf'))
             attn_weights = torch.softmax(raw_scores, dim=-1)
             
             # Average the attention across all 4 heads

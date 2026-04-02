@@ -5,8 +5,8 @@ from torch.utils.data import Dataset
 
 class NTUSkeletonDataset(Dataset):
     def __init__(self, data_folder, max_frames=100):
-        self.data_folder = data_folder
-        self.file_list = sorted([f for f in os.listdir(data_folder) if f.endswith('.skeleton')])
+        self.data_folder = os.path.join(data_folder, 'binary_pt') 
+        self.file_list = sorted([f for f in os.listdir(self.data_folder) if f.endswith('.pt')])
         self.max_frames = max_frames
 
     def __len__(self):
@@ -44,9 +44,7 @@ class NTUSkeletonDataset(Dataset):
     
     def __getitem__(self, idx):
         file_name = self.file_list[idx]
-
-        pt_file_name = file_name.replace('.skeleton','.pt')
-        file_path = os.path.join(self.data_folder, pt_file_name)
+        file_path = os.path.join(self.data_folder, file_name)
 
         action_string = file_name.split('A')[1][:3]
         action_label = int(action_string) - 1

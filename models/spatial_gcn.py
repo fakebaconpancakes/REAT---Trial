@@ -9,6 +9,7 @@ class Spatial_GCN_Layer(nn.Module):
         self.adj_matrix = nn.Parameter(torch.randn(num_joints,num_joints))
         self.linear = nn.Linear(in_channels, out_channels)
         self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(p=0.3)
     
     def forward(self,x):
         # x -> has an input shape of (Batch, Time, Joints, Channels)
@@ -21,5 +22,7 @@ class Spatial_GCN_Layer(nn.Module):
 
         #Step C: Apply Activation Function
         out = self.relu(out)
+
+        out = self.dropout(out)
         
         return out

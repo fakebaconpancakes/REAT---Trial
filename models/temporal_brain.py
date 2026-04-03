@@ -13,6 +13,8 @@ class Temporal_Brain_Layer(nn.Module):
         # Standard projections for Queries, Keys, and Values
         self.qkv_proj = nn.Linear(embed_dim, embed_dim * 3)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
+
+        self.dropout = nn.Dropout(p=0.3)
         
         # 1. Define the 5 Anatomical Rooms (0-indexed)
         # We use a tensor here so the GPU compiler can read it fast
@@ -83,6 +85,8 @@ class Temporal_Brain_Layer(nn.Module):
         attn_output = attn_output.permute(0, 2, 1, 3).contiguous().view(x.shape[0], S, self.embed_dim)
         out = self.out_proj(attn_output)
 
+        out = self.dropout(out)
+        
         # === Glass Box ===
         if return_attention:
             # We manually recreate the Q * K^T math just to get the percentages

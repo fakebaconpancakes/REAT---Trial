@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 class Spatial_GCN_Layer(nn.Module):
-    def __init__(self, in_channels=3, out_channels=64, num_joints=25):
+    def __init__(self, in_channels=9, out_channels=64, num_joints=25):
         super().__init__()
 
         #Learnable bones -> Shape:(25,25)

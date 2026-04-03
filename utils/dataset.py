@@ -3,6 +3,28 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset
 
+def engineer_physics_features(skeleton_tensor):
+    """
+    Transforms raw (X,Y,Z) coordinates into explicit physics features.
+    Expected input shape: (Time, Bodies=2, Joints=25, Channels=3)
+    Output shape: (Time, Bodies=2, Joints=25, Channels=9)
+
+    """
+    T, M, V, C = skeleton_tensor.shape
+
+    parents = [0, 0, 20, 2, 20, 4, 5, 6, 20, 8, 9, 10, 0, 12, 13, 14, 0, 16, 17, 18, 1, 22, 21, 24, 23]
+
+    bones = torch.zeros_like(skeleton_tensor)
+    for v in range(V):
+        bones[:, :, v, :] = skeleton_tensor[:, :, v, :] - skeleton_tensor[:, :, parents[v], :]
+    
+    velocity = torch.zeros_like(skeleton_tensor)
+    velocity[:-1, :, :, :] = skeleton_tensor[1:, :, :, :] - skeleton_tensor[:-1, :, :, :]
+
+    engineered_tensor = torch.cat([skeleton_tensor, bones, velocity], dim=-1)
+
+    return engineered_tensor
+
 class NTUSkeletonDataset(Dataset):
     def __init__(self, data_folder, max_frames=100):
         self.data_folder = os.path.join(data_folder, 'binary_pt') 
@@ -60,4 +82,7 @@ class NTUSkeletonDataset(Dataset):
         else:
             standardized_tensor = raw_numpy[:self.max_frames, :, :, :]
 
-        return torch.tensor(standardized_tensor, dtype=torch.float32), torch.tensor(action_label, dtype=torch.long)
+        tensor_data = torch.tensor(standardized_tensor, dtype=float32)
+        engineered_data = engineer_physics_features(tensor_data)
+
+        return engineered_data, torch.tensor(standardized_tensor, dtype=torch.float32), torch.tensor(action_label, dtype=torch.long)

@@ -82,7 +82,7 @@ class NTUSkeletonDataset(Dataset):
         else:
             standardized_tensor = raw_numpy[:self.max_frames, :, :, :]
 
-        tensor_data = torch.tensor(standardized_tensor, dtype=float32)
+        tensor_data = torch.tensor(standardized_tensor, dtype=torch.float32)
         engineered_data = engineer_physics_features(tensor_data)
 
-        return engineered_data, torch.tensor(standardized_tensor, dtype=torch.float32), torch.tensor(action_label, dtype=torch.long)
+        return engineered_data, torch.tensor(action_label, dtype=torch.long)

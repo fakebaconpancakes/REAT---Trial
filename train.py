@@ -23,7 +23,7 @@ NUM_CLASSES = 60
 
 wandb.init(
     project="HAR-REAT",
-    name="Run3-Marathon-Warmup",
+    name="Run10-TWA-ReducePenalty",
     config={
         "learning_rate": LEARNING_RATE,
         "weight_decay": WEIGHT_DECAY,
@@ -43,11 +43,11 @@ print(f'Device Type: {device.type.upper()}')
 # =====================
 print("Loading Dataset..")
 dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=8, pin_memory=True, persistent_workers=True)
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True, persistent_workers=True)
 
 print("Loading Validation Dataset..")
 val_dataset = NTUSkeletonDataset(data_folder=VAL_DIR, max_frames=100)
-val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
+val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
 
 # The Neural Networks
 gcn = Spatial_GCN_Layer().to(device)
@@ -89,6 +89,7 @@ print("Start Training..")
 gcn.train()
 transformer.train()
 classifier.train()
+best_val_acc = 0.0
 
 for epoch in range(EPOCHS):
     total_loss = 0.0
@@ -115,11 +116,7 @@ for epoch in range(EPOCHS):
         transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
 
         # 3. Forward Pass (Transformer)
-        attn_output = transformer(transformer_input) # Output: (Batch*2, 64)
-
-        # 4. Global Node (index 25) thought at the global average
-        global_node_features = attn_output[:, :, 25, :] # Extract the sequence: (Batch*2, Time, 64)
-        final_video_features = torch.mean(global_node_features, dim=1)
+        final_video_features = transformer(transformer_input)
 
         separated_bodies = final_video_features.view(B, M, 64)
         # Compress them by taking the strongest signal between Person 1 and Person 2
@@ -167,10 +164,8 @@ for epoch in range(EPOCHS):
             v_global_node = global_node.expand(B*M, v_frames, 1, 64)
             v_transformer_input = torch.cat([v_gcn_feat, v_global_node], dim=2)
             
-            v_attn_out = transformer(v_transformer_input)
+            v_final_vid = transformer(v_transformer_input)
             
-            v_global_feat = v_attn_out[:, :, 25, :]
-            v_final_vid = torch.mean(v_global_feat, dim=1)
             
             v_sep_bodies = v_final_vid.view(B, M, 64)
             v_vid_rep, _ = torch.max(v_sep_bodies, dim=1)
@@ -185,6 +180,14 @@ for epoch in range(EPOCHS):
 
     epoch_val_loss = val_loss / len(val_dataloader)
     epoch_val_acc = (val_correct / val_samples) * 100
+
+    if epoch_val_acc > best_val_acc:
+        best_val_acc = epoch_val_acc
+        os.makedirs('saved_weights', exist_ok=True)
+        torch.save(gcn.state_dict(), 'saved_weights/best_gcn.pth')
+        torch.save(transformer.state_dict(), 'saved_weights/best_transformer.pth')
+        torch.save(classifier.state_dict(), 'saved_weights/best_classifier.pth')
+        print(f"🌟 New Best Model! Saved with Val Acc: {best_val_acc:.2f}%")
 
     # Put models back into training mode for the next epoch!
     gcn.train()

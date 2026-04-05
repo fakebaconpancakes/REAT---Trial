@@ -4,17 +4,42 @@ from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 import math
 
 class Temporal_Brain_Layer(nn.Module):
-    def __init__(self, embed_dim=64, num_heads=4, num_joints=25):
+    def __init__(self, embed_dim=64, num_heads=4, num_joints=25,max_frames=100):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
-        self.global_node = nn.Parameter(torch.randn(1, 1, 1, embed_dim))
         
-        # Standard projections for Queries, Keys, and Values
-        self.qkv_proj = nn.Linear(embed_dim, embed_dim * 3)
-        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        #==== Spatial Components ====
+        self.global_node = nn.Parameter(torch.randn(1, 1, 1, embed_dim))
+        self.spatial_qkv_proj = nn.Linear(embed_dim, embed_dim*3)
+        self.spatial_out_proj = nn.Linear(embed_dim, embed_dim)
+        self.spatial_norm1 = nn.LayerNorm(embed_dim)
+        self.spatial_norm2 = nn.LayerNorm(embed_dim)
+        self.spatial_ffn = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(embed_dim * 4, embed_dim),
+            nn.Dropout(p=0.2)
+        )
 
-        self.dropout = nn.Dropout(p=0.3)
+        #==== Temporal Components ====
+        self.temporal_pos_embed = nn.Parameter(torch.randn(1,max_frames,embed_dim)) #Position embedding (timestamps)
+        self.video_token = nn.Parameter(torch.randn(1,1,embed_dim)) #video token (final reviewer)
+        
+        #temporal attention layer
+        self.temporal_norm1 = nn.LayerNorm(embed_dim)
+        self.temporal_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=0.5, batch_first=True)
+        self.temporal_norm2 = nn.LayerNorm(embed_dim)
+        self.temporal_ffn = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim * 4),
+            nn.GELU(),
+            nn.Dropout(p=0.2),
+            nn.Linear(embed_dim * 4, embed_dim),
+            nn.Dropout(p=0.2)
+        )
+
+        self.dropout = nn.Dropout(p=0.2)
         
         # 1. Define the 5 Anatomical Rooms (0-indexed)
         # We use a tensor here so the GPU compiler can read it fast
@@ -47,71 +72,57 @@ class Temporal_Brain_Layer(nn.Module):
 
 
     def forward(self, x, return_attention=False):
-        # x shape: (Batch, Time, Sequence_Length, Embed_Dim)
-        # Sequence Length here is our 25 joints + 1 Global Node = 26 tokens
-        original_shape = x.shape
-        if len(original_shape) == 4:
-            B, T, S, E = original_shape
-            x = x.view(B*T, S, E)
-        else:
-            B, S, E = original_shape
-            T = 1
+        # x -> shape: (B*M, Time, 26, Embed_Dim)
+        B_M, T, S, E = x.shape
 
-        # The FlexAttention block mask is built lazily on the first forward pass (see lines 71-75).
-        
-        # 1. Generate Queries, Keys, and Values
-        qkv = self.qkv_proj(x)
-        
-        # 2. Reshape for Multi-Head Attention: (Batch, Heads, Sequence, Head_Dim)
-        qkv = qkv.view(x.shape[0], S, 3, self.num_heads, self.embed_dim // self.num_heads)
+        #===== BLOCK 1: Spatial Attention (Independent Frames) ====
+        x_spatial = x.view(B_M * T, S, E)
+
+        x_norm = self.spatial_norm1(x_spatial)
+        qkv = self.spatial_qkv_proj(x_norm)
+        qkv = qkv.view(B_M * T, S, 3, self.num_heads, self.embed_dim // self.num_heads)
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
-        
-        # 3. Build the block mask on first forward pass (lazy init).
-        # This guarantees the mask is on the same device as x (room_map is a
-        # registered buffer, so it was already moved by .to(device) before here).
+
         if self._cached_block_mask is None:
             self._cached_block_mask = create_block_mask(
-                self._mask_rule, B=None, H=self._num_heads, Q_LEN=26, KV_LEN=26,
-                device=x.device
+                self._mask_rule, B=None, H=self._num_heads, Q_LEN = 26, KV_LEN=26, device=x.device
             )
-        block_mask = self._cached_block_mask
-
-        # 4. Execute FlexAttention
-        # The GPU will physically skip computing the O(N^2) empty space
-        attn_output = self.compiled_self_attention(q, k, v, block_mask=block_mask)
         
-        # 5. Reshape and project back out
-        attn_output = attn_output.permute(0, 2, 1, 3).contiguous().view(x.shape[0], S, self.embed_dim)
-        out = self.out_proj(attn_output)
+        attn_output = self.compiled_self_attention(q, k, v, block_mask=self._cached_block_mask)
+        attn_output = attn_output.permute(0, 2, 1, 3).contiguous().view(B_M * T, S, E)
 
-        out = self.dropout(out)
+        attn_output = self.spatial_out_proj(attn_output)
+        x_spatial = x_spatial + self.dropout(attn_output)
+        x_spatial = x_spatial + self.spatial_ffn(self.spatial_norm2(x_spatial))
+
+        spatial_globals = x_spatial[:, 25, :] #Extract Global Node: (B_M * T, E)
+
+        #==== BLOCK 2: TEMPORAL ATTENTION (Connecting Time) ====
+        x_temporal = spatial_globals.view(B_M, T, E)
+
+        #1. Inject Time (Positional Embedings)
+        x_temporal = x_temporal + self.temporal_pos_embed[:, :T, :]
+
+        #2. Attach Video token to the fornt of the seq. -> Shape: (B_M, T+1, 64)
+        video_token_expanded = self.video_token.expand(B_M, -1, -1)
+        x_temporal = torch.cat([video_token_expanded, x_temporal], dim=1)
+
+        #3. Temporal attention
+        x_temp_norm = self.temporal_norm1(x_temporal)
+        temp_attn_out, temporal_attn_weights = self.temporal_attn(
+            query=x_temp_norm, key=x_temp_norm, value=x_temp_norm, need_weights=return_attention
+        )
+
+        x_temporal = x_temporal + self.dropout(temp_attn_out)
+        x_temporal = x_temporal + self.temporal_ffn(self.temporal_norm2(x_temporal))
+
+        #4. Extract full processed video toke (index 0)
+        final_video_representation = x_temporal[:, 0, :]
         
-        # === Glass Box ===
+        #==== GLASS BOX ====
         if return_attention:
-            # We manually recreate the Q * K^T math just to get the percentages
-            d_k = q.size(-1)
-            raw_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)
-            
-            # Convert the cached Triton hardware mask into a normal PyTorch boolean mask
-            dense_mask = self._cached_block_mask.to_dense()
-            
-            # Mask out the forbidden rooms with -infinity so Softmax turns them into 0%
-            raw_scores = raw_scores.masked_fill(~dense_mask.bool(), float('-inf'))
-            attn_weights = torch.softmax(raw_scores, dim=-1)
-            
-            # Average the attention across all 4 heads
-            attn_weights_mean = attn_weights.mean(dim=1)
-            
-            # Reshape back to 4D if necessary
-            if len(original_shape) == 4:
-                out = out.view(B, T, S, self.embed_dim)
-                attn_weights_mean = attn_weights_mean.view(B, T, S, S)
-                
-            return out, attn_weights_mean
+            video_token_attention = temporal_attn_weights[:, 0, 1:]
+            return final_video_representation, video_token_attention
 
-        # Reshape back to 4D for standard training
-        if len(original_shape) == 4:
-            out = out.view(B, T, S, self.embed_dim)
-        
-        return out
+        return final_video_representation

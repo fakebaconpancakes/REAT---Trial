@@ -10,17 +10,29 @@ def engineer_physics_features(skeleton_tensor):
     Output shape: (Time, Bodies=2, Joints=25, Channels=9)
 
     """
+
+    # --- THE SOTA FIX: ROOT CENTERING ---
+    # Joint 0 is the Base of the Spine. We make it the (0,0,0) origin point.
+    # This completely destroys the network's ability to memorize room locations!
+    root_joint = skeleton_tensor[:, :, 0:1, :].clone() # Extract spine coords
+    skeleton_tensor = skeleton_tensor - root_joint     # Subtract from all 25 joints
+    # ------------------------------------
+
     T, M, V, C = skeleton_tensor.shape
 
+    # 1. Kinematic Tree
     parents = [0, 0, 20, 2, 20, 4, 5, 6, 20, 8, 9, 10, 0, 12, 13, 14, 0, 16, 17, 18, 1, 22, 21, 24, 23]
 
+    # 2. Calculate Bones
     bones = torch.zeros_like(skeleton_tensor)
     for v in range(V):
         bones[:, :, v, :] = skeleton_tensor[:, :, v, :] - skeleton_tensor[:, :, parents[v], :]
     
+    # 3. Calculate Velocity
     velocity = torch.zeros_like(skeleton_tensor)
     velocity[:-1, :, :, :] = skeleton_tensor[1:, :, :, :] - skeleton_tensor[:-1, :, :, :]
 
+    # Stack: Relative (3) + Bones (3) + Velocity (3) = 9 Channels
     engineered_tensor = torch.cat([skeleton_tensor, bones, velocity], dim=-1)
 
     return engineered_tensor

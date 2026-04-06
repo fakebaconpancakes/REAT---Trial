@@ -7,3 +7,4 @@ saved_weights/
 *.pth
 *.npy
 train_log.txt
+results/

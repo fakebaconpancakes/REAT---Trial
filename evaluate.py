@@ -15,7 +15,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Device in-use: {device.type.upper()}")
 
 # 2. INITIALIZATION
-VAL_DIR = 'data/val_skeletons'
+VAL_DIR = 'data/test_skeletons'
 BATCH_SIZE = 16
 NUM_CLASSES = 60
 
@@ -28,9 +28,9 @@ gcn = Spatial_GCN_Layer().to(device)
 transformer = Temporal_Brain_Layer().to(device)
 classifier = nn.Linear(64, NUM_CLASSES).to(device)
 
-gcn.load_state_dict(torch.load('saved_weights/gcn_epoch_50.pth', map_location=device, weights_only=True))
-transformer.load_state_dict(torch.load('saved_weights/transformer_epoch_50.pth', map_location=device, weights_only=True))
-classifier.load_state_dict(torch.load('saved_weights/classifier_epoch_50.pth', map_location=device, weights_only=True))
+gcn.load_state_dict(torch.load('saved_weights/best_gcn.pth', map_location=device, weights_only=True))
+transformer.load_state_dict(torch.load('saved_weights/best_transformer.pth', map_location=device, weights_only=True))
+classifier.load_state_dict(torch.load('saved_weights/best_classifier.pth', map_location=device, weights_only=True))
 global_node = transformer.global_node  # nn.Parameter saved inside transformer's state_dict
 
 gcn.eval()
@@ -56,16 +56,12 @@ with torch.no_grad():
         # Forward Pass
         gcn_features = gcn(gcn_input)
         frames = gcn_features.shape[1]
-        
         global_node_expanded = global_node.expand(B*M, frames, 1, 64)
         transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
-
+    
         attn_output, real_attention_matrix = transformer(transformer_input, return_attention=True)
-        
-        global_node_features = attn_output[:, :, 25, :] 
-        final_video_features = torch.mean(global_node_features, dim=1)
 
-        separated_bodies = final_video_features.view(B, M, 64)
+        separated_bodies = attn_output.view(B, M, 64)
         video_representation, _ = torch.max(separated_bodies, dim=1) 
         
         predictions = classifier(video_representation)

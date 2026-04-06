@@ -1,121 +1,135 @@
+import os
+import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
+import matplotlib.animation as animation
 
-print("Initializing Real-Data XAI GIF Studio...")
+from models.spatial_gcn import Spatial_GCN_Layer
+from models.temporal_brain import Temporal_Brain_Layer
+from utils.dataset import NTUSkeletonDataset
+from utils.xai_extractor import extract_xai_red_dots
 
 # ==========================================
-# 1. KINECT V2 ANATOMY DEFINITION
+# 1. LOAD THE GLASS BOX
 # ==========================================
+device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
+print("Loading Architecture...")
+gcn = Spatial_GCN_Layer(in_channels=9, out_channels=64).to(device)
+transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100).to(device)
+
+gcn.load_state_dict(torch.load('saved_weights/best_gcn.pth', map_location=device, weights_only=True))
+transformer.load_state_dict(torch.load('saved_weights/best_transformer.pth', map_location=device, weights_only=True))
+gcn.eval()
+transformer.eval()
+
+# ==========================================
+# 2. RUN INFERENCE & EXTRACT HEATMAP
+# ==========================================
+print("Running Inference...")
+dataset = NTUSkeletonDataset(data_folder='data/test_skeletons', max_frames=100)
+
+# Grab the first file's engineered tensor for the neural network
+engineered_tensor, true_label = dataset[0]
+
+tensor_input = engineered_tensor.unsqueeze(0).to(device)
+global_node = transformer.global_node
+
+with torch.no_grad():
+    B, T, M, V, C = tensor_input.shape
+    gcn_input = tensor_input.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C)
+    gcn_features = gcn(gcn_input)
+    transformer_input = torch.cat([gcn_features, global_node.expand(B*M, T, 1, 64)], dim=2)
+    _, attention_matrix = transformer(transformer_input, return_attention=True)
+
+raw_attention = attention_matrix[0].cpu().numpy()
+heat_scores_100 = extract_xai_red_dots(raw_attention) # Shape: (100, 25)
+
+# ==========================================
+# 3. LOAD THE RAW SKELETON FOR PLOTTING
+# ==========================================
+# Get the filename (e.g., "S001C001...A010.pt") and find its original text file
+pt_filename = dataset.file_list[0]
+skeleton_filename = pt_filename.replace('.pt', '.skeleton')
+
+# Build the path to the raw_text folder
+raw_file_path = os.path.join('data/test_skeletons/raw_text', skeleton_filename)
+
+# Use the dataset's built-in parser to get the un-padded, naturally moving data!
+raw_skeleton_tensor = dataset.parse_single_skeleton(raw_file_path)
+actual_frames = raw_skeleton_tensor.shape[0]
+
+# Align the 100-frame AI attention to the raw video length
+if actual_frames > 100:
+    # If the video is longer (e.g., 118), stretch the 100 AI scores to fit perfectly
+    indices = np.linspace(0, 99, actual_frames).astype(int)
+    heat_scores = heat_scores_100[indices]
+else:
+    # If the video is shorter (e.g., 70), slice off the AI's zero-padded attention
+    heat_scores = heat_scores_100[:actual_frames]
+
+# Extract Person 0, XYZ coordinates
+person_coords = raw_skeleton_tensor[:, 0, :, 0:3]
+
+# ==========================================
+# 4. BUILD THE GIF (Using Dynamic Camera Bounds)
+# ==========================================
+print(f"Generating XAI GIF Viewer for {actual_frames} frames...")
+
+# Find the person's average physical location in the room
+active_data = person_coords[person_coords[:, 0, 0] != 0] 
+if len(active_data) > 0:
+    mid_x = np.mean(active_data[:, :, 0])
+    mid_y = np.mean(active_data[:, :, 1]) # Kinect Y is Height
+    mid_z = np.mean(active_data[:, :, 2]) # Kinect Z is Depth
+else:
+    mid_x, mid_y, mid_z = 0, 0, 3 # Fallback
+
 kinect_bones = [
-    (0, 1), (1, 20), (20, 2), (2, 3),                     # Spine to Head
-    (20, 4), (4, 5), (5, 6), (6, 7), (7, 21), (7, 22),    # Left Arm & Hand
-    (20, 8), (8, 9), (9, 10), (10, 11), (11, 23), (11, 24), # Right Arm & Hand
-    (0, 12), (12, 13), (13, 14), (14, 15),                # Left Leg
-    (0, 16), (16, 17), (17, 18), (18, 19)                 # Right Leg
+    (0, 1), (1, 20), (2, 20), (3, 2), (4, 20), (5, 4), (6, 5), (7, 6), 
+    (8, 20), (9, 8), (10, 9), (11, 10), (12, 0), (13, 12), (14, 13), 
+    (15, 14), (16, 0), (17, 16), (18, 17), (19, 18), (21, 22), 
+    (22, 7), (23, 24), (24, 11)
 ]
 
-# ==========================================
-# 2. DATA LOADERS
-# ==========================================
-def parse_single_skeleton(file_path):
-    with open(file_path, 'r') as f:
-        datas = f.readlines()
-    if not datas: return None
-
-    nframe = int(datas[0].strip())
-    skeleton_tensor = np.zeros((nframe, 2, 25, 3), dtype=np.float32)
-    
-    cursor = 0
-    for frame in range(nframe):
-        cursor += 1
-        bodycount = int(datas[cursor].strip())
-        if bodycount == 0: continue
-            
-        for body in range(bodycount):
-            cursor += 2 
-            njoints_in_file = int(datas[cursor].strip())
-            for joint in range(njoints_in_file):
-                cursor += 1 
-                if body < 2: 
-                    jointinfo = datas[cursor].strip().split()
-                    skeleton_tensor[frame, body, joint, :] = [float(jointinfo[0]), float(jointinfo[1]), float(jointinfo[2])]
-    return skeleton_tensor
-
-# --- AUTO-DETECTED: reads the skeleton path written by evaluate.py ---
-HEATMAP_FILE  = 'extracted_xai_heatmap.npy'
-SOURCE_FILE   = 'extracted_xai_source.txt'
-
-try:
-    with open(SOURCE_FILE, 'r') as f:
-        SKELETON_FILE = f.read().strip()
-    print(f"Using skeleton: {SKELETON_FILE}")
-except FileNotFoundError:
-    # Fallback: manually set the path if evaluate.py hasn't been run yet
-    SKELETON_FILE = 'data/val_skeletons/S001C001P001R001A010.skeleton'
-    print(f"[WARN] {SOURCE_FILE} not found — using fallback: {SKELETON_FILE}")
-
-try:
-    raw_data = parse_single_skeleton(SKELETON_FILE)
-    person_sequence = raw_data[:, 0, :, :] 
-    
-    # Load the REAL AI Heatmap generated by evaluate.py
-    xai_heatmaps = np.load(HEATMAP_FILE)
-    
-    # Ensure frames match
-    num_frames = min(person_sequence.shape[0], xai_heatmaps.shape[0])
-    print(f"Loaded and fused real data: {num_frames} frames.")
-except Exception as e:
-    print(f"Error loading files: {e}")
-    exit()
-
-# ==========================================
-# 3. BUILD THE ANIMATION ENGINE
-# ==========================================
-fig = plt.figure(figsize=(10, 10))
+fig = plt.figure(figsize=(8, 8))
 ax = fig.add_subplot(111, projection='3d')
-ax.set_title("Temporal Brain XAI: Joint Attention Map", fontsize=16, fontweight='bold')
-ax.set_axis_off() 
-
-x_min, x_max = np.min(person_sequence[:, :, 0]), np.max(person_sequence[:, :, 0])
-y_min, y_max = np.min(person_sequence[:, :, 1]), np.max(person_sequence[:, :, 1])
-z_min, z_max = np.min(person_sequence[:, :, 2]), np.max(person_sequence[:, :, 2])
-
-ax.set_xlim([x_min - 0.2, x_max + 0.2])
-ax.set_ylim([z_min - 0.2, z_max + 0.2]) 
-ax.set_zlim([y_min - 0.2, y_max + 0.2]) 
-ax.view_init(elev=0, azim=-90) 
-
-bone_lines = [ax.plot([], [], [], color='black', linewidth=3, zorder=1)[0] for _ in kinect_bones]
-joint_scatter = ax.scatter([], [], [], s=120, zorder=2, edgecolors='white', linewidth=1.5)
-
-# Fixed the deprecation warning from your notebook
-cmap = plt.colormaps['coolwarm']
+cmap = plt.get_cmap('coolwarm') 
 
 def update(frame_idx):
-    current_skeleton = person_sequence[frame_idx]
-    current_heat = xai_heatmaps[frame_idx]
+    ax.clear()
     
-    for i, (j1, j2) in enumerate(kinect_bones):
-        x_vals = [current_skeleton[j1, 0], current_skeleton[j2, 0]]
-        y_vals = [current_skeleton[j1, 2], current_skeleton[j2, 2]] 
-        z_vals = [current_skeleton[j1, 1], current_skeleton[j2, 1]] 
-        bone_lines[i].set_data(x_vals, y_vals)
-        bone_lines[i].set_3d_properties(z_vals)
+    # NEW: Dynamic Camera Boundaries!
+    ax.set_xlim(mid_x - 1, mid_x + 1)
+    ax.set_ylim(mid_z - 1, mid_z + 1) 
+    ax.set_zlim(mid_y - 1, mid_y + 1)
+    
+    ax.set_title(f'Glass Box XAI | True Action: {true_label.item()} | Frame {frame_idx}')
+    ax.set_xlabel('X (Meters)')
+    ax.set_ylabel('Depth (Z Meters)')
+    ax.set_zlabel('Height (Y Meters)')
+    
+    current_skeleton = person_coords[frame_idx]
+    current_heat = heat_scores[frame_idx]
+    
+    # Skip if zero-padded (Though we sliced it, this is a good safety net)
+    if np.all(current_skeleton[0] == 0):
+        return
         
-    joint_scatter._offsets3d = (current_skeleton[:, 0], current_skeleton[:, 2], current_skeleton[:, 1])
+    xs, ys, zs = current_skeleton[:, 0], current_skeleton[:, 1], current_skeleton[:, 2]
     
+    # Apply XAI Colors to Joints
     colors = cmap(current_heat)
-    joint_scatter.set_color(colors)
-    joint_scatter.set_edgecolor('black') 
+    ax.scatter(xs, zs, ys, c=colors, s=60, edgecolors='black', linewidth=1, zorder=2)
     
-    return bone_lines + [joint_scatter]
+    # Draw Bones
+    for bone in kinect_bones:
+        j1, j2 = bone
+        ax.plot([xs[j1], xs[j2]], [zs[j1], zs[j2]], [ys[j1], ys[j2]], c='black', linewidth=2, zorder=1)
 
-print("Rendering GIF with real XAI data... (This may take 30-60 seconds)")
-ani = FuncAnimation(fig, update, frames=num_frames, interval=33, blit=False)
+print(f"Compiling {actual_frames} frames into a GIF... Please wait.")
+ani = animation.FuncAnimation(fig, update, frames=actual_frames, interval=50)
 
-gif_filename = 'real_xai_output.gif'
-ani.save(gif_filename, writer='pillow', fps=30)
+save_path = "xai_action.gif"
+ani.save(save_path, writer='pillow', fps=20)
 plt.close()
-
-print(f"Success! Animation saved locally as: {gif_filename}")
+print(f"Success! Saved to {save_path}")

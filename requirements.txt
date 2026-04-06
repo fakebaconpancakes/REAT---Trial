@@ -18,3 +18,5 @@ matplotlib
 pillow          # GIF writer for visualization_gif.py
 thop            # FLOPs/MACs profiler for complexity_profiler.py
 triton          # Triton GPU kernels (bundled with CUDA torch, listed for explicitness)
+plotly
+pandas

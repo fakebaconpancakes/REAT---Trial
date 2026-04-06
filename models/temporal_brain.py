@@ -122,7 +122,23 @@ class Temporal_Brain_Layer(nn.Module):
         
         #==== GLASS BOX ====
         if return_attention:
+            # 1. Temporal Attention (Which frames matter?)
+            # video_token_attention shape: (B_M, T)
             video_token_attention = temporal_attn_weights[:, 0, 1:]
-            return final_video_representation, video_token_attention
+            
+            # 2. Spatial Attention (Which joints matter?)
+            # We manually calculate how much the Global Node (Token 25) looked at the physical joints (Tokens 0-24)
+            global_q = q[:, :, 25:26, :] # (B_M * T, Heads, 1, Head_Dim)
+            spatial_scores = torch.matmul(global_q, k.transpose(-2, -1)) / math.sqrt(q.size(-1))
+            
+            # Average across the 4 heads, drop the '1' dim, and slice the 25 physical joints
+            spatial_attention = spatial_scores.mean(dim=1).squeeze(1)[:, :25] # (B_M * T, 25)
+            spatial_attention = spatial_attention.view(B_M, T, 25) # (B_M, Time, 25)
+            
+            # 3. SPATIO-TEMPORAL FUSION
+            # Multiply Spatial by Temporal to get the true, time-aware importance of every joint!
+            ultimate_xai_matrix = spatial_attention * video_token_attention.unsqueeze(-1)
+            
+            return final_video_representation, ultimate_xai_matrix
 
         return final_video_representation

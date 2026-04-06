@@ -1,80 +1,52 @@
 import torch
 import torch.nn as nn
-from thop import profile
-from thop import clever_format
+from thop import profile, clever_format
 
 from models.spatial_gcn import Spatial_GCN_Layer
 from models.temporal_brain import Temporal_Brain_Layer
 
-print("Initializing Hardware Complexity Profiler..")
+# 1. Wrap the entire pipeline into one continuous model for profiling
+class REAT_Model(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.gcn = Spatial_GCN_Layer(in_channels=9, out_channels=64)
+        self.transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100)
+        
+    def forward(self, x):
+        # x shape: (Batch, Time, Bodies, Joints, Channels) -> (1, 100, 2, 25, 9)
+        B, T, M, V, C = x.shape
+        gcn_input = x.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C) # Shape: (2, 100, 25, 9)
+        
+        gcn_features = self.gcn(gcn_input) # Shape: (2, 100, 25, 64)
+        
+        # Extract and concatenate the Global Node
+        global_node = self.transformer.global_node.expand(B*M, T, 1, 64)
+        transformer_input = torch.cat([gcn_features, global_node], dim=2)
+        
+        # Forward pass through the Temporal Brain (with the FFN!)
+        out = self.transformer(transformer_input)
+        return out
 
-# 1. Model intialization
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-gcn = Spatial_GCN_Layer().to(device)
-transformer = Temporal_Brain_Layer().to(device)
-global_node = nn.Parameter(torch.zeros(1, 1, 1, 64, device=device))
-classifier = nn.Linear(64,60).to(device)
+# 2. Initialize and Profile
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Building REAT Profiler on {device}...")
+model = REAT_Model().to(device)
 
-# 2. Dummy Video
-B, M, T, V, C = 1, 2, 100, 25, 3
-dummy_input = torch.randn(B, M, T, V, C).to(device) 
-gcn_input = dummy_input.permute(0, 1, 2, 3, 4).reshape(-1, T, V, C) # Shape: (2,100,25,3)
+# Create a dummy tensor that perfectly matches your 9-channel Physics Engine output
+# (Batch=1, Time=100, Bodies=2, Joints=25, Channels=9)
+dummy_input = torch.randn(1, 100, 2, 25, 9).to(device)
 
-# 3. Profile the GCN
-print("(1) Profiling GCN...")
-gcn_macs, gcn_params = profile(gcn, inputs=(gcn_input, ), verbose=False)
+print("Calculating MACs (Compute) and Parameters (Memory)...")
+# verbose=False stops it from printing every single internal PyTorch operation
+macs, params = profile(model, inputs=(dummy_input, ), verbose=False)
 
-# 4. Profile Temporal Brain
-with torch.no_grad():
-    gcn_features = gcn(gcn_input)
+# Convert huge raw numbers to human-readable format (e.g., "M" for Mega, "G" for Giga)
+macs_str, params_str = clever_format([macs, params], "%.3f")
 
-frames = gcn_features.shape[1]
-global_node_expanded = global_node.expand(B*M, frames, 1, 64)
-transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
-
-print("(2) Profile Temporal Brain...")
-tf_macs, tf_params = profile(transformer, inputs=(transformer_input, False), verbose=False)
-
-# ==========================================
-# 🚨 MANUAL FLEX_ATTENTION MACS CORRECTION 🚨
-# ==========================================
-# thop ignores the functional flex_attention call, so we calculate its MACs manually.
-# Your notebook confirmed your mask has 180 active connections.
-active_connections = 180 
-batch_size = B * M  # 2 bodies
-time_steps = T      # 100 frames
-embed_dim = 64
-
-# Math: (Q * K^T MACs) + (Attn * V MACs) = 2 * active_connections * embed_dim
-flex_attn_macs = batch_size * time_steps * 2 * active_connections * embed_dim
-
-# Add the missing math back into the Transformer's total
-tf_macs += flex_attn_macs
-# ==========================================
-
-# 5. Profile the Classifier
-with torch.no_grad():
-    attn_output = transformer(transformer_input)
-    final_features = attn_output[:, -1, 25, :]
-    separated = final_features.view(B, M, 64)
-    video_rep, _ = torch.max(separated, dim=1)
-
-print("(3) Profile Classifier...")
-class_macs, class_params = profile(classifier, inputs=(video_rep, ), verbose=False)
-
-# 6. Calculate Totals and Format
-total_macs = gcn_macs + tf_macs + class_macs
-total_params = gcn_params + tf_params + class_params
-
-# MACs (Multiply-Accumulate Operations) are usually multiplied by 2 to get standard FLOPs
-total_flops = total_macs * 2
-
-formatted_flops, formatted_params = clever_format([total_flops, total_params], "%.2f")
-
-print("-" * 50)
-print("ARCHITECTURE COMPLEXITY REPORT (Single-Stream)")
-print("-" * 50)
-print(f"Total Parameters: {formatted_params} (VRAM Footprint)")
-print(f"Total FLOPs:      {formatted_flops} (Compute Cost)")
-print("-" * 50)
-
+print("\n" + "="*50)
+print(f"REAT Architecture Complexity Report")
+print("="*50)
+print(f"Total Parameters:  {params_str}")
+print(f"Total MACs:        {macs_str}")
+print("="*50)
+print("*Note: 1 MAC (Multiply-Accumulate) ≈ 2 FLOPs")

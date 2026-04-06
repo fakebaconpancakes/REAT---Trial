@@ -5,10 +5,30 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from tqdm import tqdm
 
+import argparse
+import torch.nn as nn
+
 from models.spatial_gcn import Spatial_GCN_Layer
 from models.temporal_brain import Temporal_Brain_Layer
 from utils.dataset import NTUSkeletonDataset
 from utils.xai_extractor import extract_xai_red_dots
+
+NTU_CLASSES = [
+    'drink water', 'eat meal/snack', 'brushing teeth', 'brushing hair', 'drop', 'pickup',
+    'throw', 'sitting down', 'standing up', 'clapping', 'reading', 'writing',
+    'tear up paper', 'wear jacket', 'take off jacket', 'wear a shoe', 'take off a shoe',
+    'wear on glasses', 'take off glasses', 'put on a hat/cap', 'take off a hat/cap',
+    'cheer up', 'hand waving', 'kicking something', 'reach into pocket', 'hopping',
+    'jump up', 'make a phone call', 'playing with phone/tablet', 'typing on a keyboard',
+    'pointing to something with finger', 'taking a selfie', 'check time (from watch)',
+    'rub two hands together', 'nod head/bow', 'shake head', 'wipe face', 'salute',
+    'put the palms together', 'cross hands in front (say stop)', 'sneeze/cough', 'staggering',
+    'falling', 'touch head (headache)', 'touch chest (stomachache)', 'touch back (backache)', 'touch neck (neckache)',
+    'nausea or vomiting condition', 'use a fan/feeling warm', 'punching/slapping other person',
+    'kicking other person', 'pushing other person', 'pat on back of other person',
+    'point finger at the other person', 'hugging other person', 'giving something to other person',
+    'touch other person\'s pocket', 'handshaking', 'walking towards each other', 'walking apart from each other'
+]
 
 # ==========================================
 # 0. SETUP DIRECTORIES
@@ -25,11 +45,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
 print(f"Loading Architecture on {device}...")
 gcn = Spatial_GCN_Layer(in_channels=9, out_channels=64).to(device)
 transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100).to(device)
+classifier = nn.Linear(64, 60).to(device)
 
 gcn.load_state_dict(torch.load('saved_weights/best_gcn.pth', map_location=device, weights_only=True))
 transformer.load_state_dict(torch.load('saved_weights/best_transformer.pth', map_location=device, weights_only=True))
+classifier.load_state_dict(torch.load('saved_weights/best_classifier.pth', map_location=device, weights_only=True))
 gcn.eval()
 transformer.eval()
+classifier.eval()
 
 # ==========================================
 # 2. LOAD DATASET
@@ -48,9 +71,18 @@ kinect_bones = [
 # ==========================================
 # 3. BATCH PROCESSING LOOP
 # ==========================================
-print(f"Starting batch processing of {total_files} files...")
 
-for file_idx in tqdm(range(total_files), desc="Processing XAI"):
+parser = argparse.ArgumentParser(description='Batch process XAI heatmaps.')
+parser.add_argument('--start', type=int, default=0, help='Start index for processing files.')
+parser.add_argument('--end', type=int, default=None, help='End index for processing files.')
+args = parser.parse_args()
+
+start_idx = args.start
+end_idx = args.end if args.end is not None else total_files
+
+print(f"Starting batch processing from file index {start_idx} to {end_idx}...")
+
+for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
     target_base = dataset.file_list[file_idx].replace('.pt', '')
     
     npy_path = os.path.join(NPY_DIR, f"{target_base}.npy")
@@ -70,7 +102,15 @@ for file_idx in tqdm(range(total_files), desc="Processing XAI"):
         gcn_input = tensor_input.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C)
         gcn_features = gcn(gcn_input)
         transformer_input = torch.cat([gcn_features, global_node.expand(B*M, T, 1, 64)], dim=2)
-        _, attention_matrix = transformer(transformer_input, return_attention=True)
+        attn_output, attention_matrix = transformer(transformer_input, return_attention=True)
+        
+        separated_bodies = attn_output.view(B, M, 64)
+        video_representation, _ = torch.max(separated_bodies, dim=1) 
+        predictions = classifier(video_representation)
+        probs = torch.nn.functional.softmax(predictions, dim=1)
+        pred_prob, predicted_class = torch.max(probs, 1)
+        pred_label = predicted_class.item()
+        pred_confidence = pred_prob.item() * 100
 
     raw_attention = attention_matrix[0].cpu().numpy()
     heat_scores_100 = extract_xai_red_dots(raw_attention)
@@ -93,27 +133,40 @@ for file_idx in tqdm(range(total_files), desc="Processing XAI"):
         actual_frames = raw_skeleton_tensor.shape[0]
         
         # 1. SMART TIME-WARPING (Fixes the >100 frames crash)
+        # Process BOTH bodies into the XAI scale!
+        full_heat_scores_100 = extract_xai_red_dots(attention_matrix.cpu().numpy()) # (2, 100, 25)
+        
         if actual_frames > 100:
             indices = np.linspace(0, 99, actual_frames).astype(int)
-            heat_scores = heat_scores_100[indices]
+            heat_scores = full_heat_scores_100[:, indices, :]
         else:
-            heat_scores = heat_scores_100[:actual_frames]
+            heat_scores = full_heat_scores_100[:, :actual_frames, :]
             
-        person_coords = raw_skeleton_tensor[:, 0, :, 0:3]
+        all_coords = raw_skeleton_tensor[:, :, :, 0:3]
 
         # 2. DYNAMIC CAMERA BOUNDS (Fixes the blank screen)
-        # Find the person's average physical location in the room
-        active_data = person_coords[person_coords[:, 0, 0] != 0] 
-        if len(active_data) == 0:
-            continue # Failsafe if the body was completely empty
+        # Ensure we don't include missing joints (marked as 0,0,0) in our camera center calculation
+        valid_coords = all_coords[np.any(all_coords != 0, axis=-1)]
+        if len(valid_coords) == 0:
+            continue # Failsafe if the scene was completely empty
             
-        mid_x = np.mean(active_data[:, :, 0])
-        mid_y = np.mean(active_data[:, :, 1]) # Kinect Y is Height
-        mid_z = np.mean(active_data[:, :, 2]) # Kinect Z is Depth
+        mid_x = np.mean(valid_coords[:, 0])
+        mid_y = np.mean(valid_coords[:, 1]) # Kinect Y is Height
+        mid_z = np.mean(valid_coords[:, 2]) # Kinect Z is Depth
 
-        fig = plt.figure(figsize=(8, 8))
+        fig = plt.figure(figsize=(10, 8)) # Made figure slightly wider to fit colorbar beautifully
         ax = fig.add_subplot(111, projection='3d')
+        ax.set_box_aspect([1, 1, 1])
         cmap = plt.get_cmap('coolwarm') 
+
+        # --- COLORBAR ---
+        # Representing heatmap values (Blue = Low Attention, Red = High Attention)
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=ax, shrink=0.5, pad=0.1)
+        cbar.ax.set_title('Attention Level', fontsize=10, pad=10)
+        cbar.set_ticks([0, 0.5, 1])
+        cbar.set_ticklabels(['Low (Blue)', 'Medium', 'High (Red)']) 
 
         def update(frame_idx):
             ax.clear()
@@ -123,24 +176,39 @@ for file_idx in tqdm(range(total_files), desc="Processing XAI"):
             ax.set_ylim(mid_z - 1, mid_z + 1) # Matplotlib Y axis handles Depth
             ax.set_zlim(mid_y - 1, mid_y + 1) # Matplotlib Z axis handles Height
             
-            ax.set_title(f'Action: {true_label.item()} | File: {target_base}')
+            true_action_name = NTU_CLASSES[true_label.item()]
+            
+            if pred_label == true_label.item():
+                status = f"Correct ({pred_confidence:.1f}%)"
+            else:
+                status = f"Wrong: {NTU_CLASSES[pred_label]} ({pred_confidence:.1f}%)"
+                
+            ax.set_title(f'Action: {true_action_name}\nAccuracy: {status}')
             ax.set_xlabel('X (Meters)')
             ax.set_ylabel('Depth (Z Meters)')
             ax.set_zlabel('Height (Y Meters)')
             
-            current_skeleton = person_coords[frame_idx]
-            current_heat = heat_scores[frame_idx]
-            
-            if np.all(current_skeleton[0] == 0):
-                return
+            # Draw BOTH bodies simultaneously
+            for body_idx in range(2):
+                current_skeleton = all_coords[frame_idx, body_idx]
+                current_heat = heat_scores[body_idx, frame_idx]
                 
-            xs, ys, zs = current_skeleton[:, 0], current_skeleton[:, 1], current_skeleton[:, 2]
-            colors = cmap(current_heat)
-            ax.scatter(xs, zs, ys, c=colors, s=60, edgecolors='black', linewidth=1, zorder=2)
-            
-            for bone in kinect_bones:
-                j1, j2 = bone
-                ax.plot([xs[j1], xs[j2]], [zs[j1], zs[j2]], [ys[j1], ys[j2]], c='black', linewidth=2, zorder=1)
+                # Mask out missing joints (0,0,0)
+                valid_joints = np.any(current_skeleton != 0, axis=-1)
+                if not np.any(valid_joints):
+                    continue # Body missing from this frame
+                
+                xs, ys, zs = current_skeleton[:, 0], current_skeleton[:, 1], current_skeleton[:, 2]
+                colors = cmap(current_heat)
+                
+                ax.scatter(xs[valid_joints], zs[valid_joints], ys[valid_joints], 
+                           c=colors[valid_joints], s=60, edgecolors='black', linewidth=1, zorder=2)
+                
+                for bone in kinect_bones:
+                    j1, j2 = bone
+                    if not valid_joints[j1] or not valid_joints[j2]:
+                        continue
+                    ax.plot([xs[j1], xs[j2]], [zs[j1], zs[j2]], [ys[j1], ys[j2]], c='black', linewidth=2, zorder=1)
 
         # Disable printing inside the loop so it doesn't break the progress bar
         ani = animation.FuncAnimation(fig, update, frames=actual_frames, interval=50)

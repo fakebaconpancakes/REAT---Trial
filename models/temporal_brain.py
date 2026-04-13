@@ -82,7 +82,9 @@ class Temporal_Brain_Layer(nn.Module):
         qkv = self.spatial_qkv_proj(x_norm)
         qkv = qkv.view(B_M * T, S, 3, self.num_heads, self.embed_dim // self.num_heads)
         qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
+        q = qkv[0].contiguous()
+        k = qkv[1].contiguous()
+        v = qkv[2].contiguous()
 
         if self._cached_block_mask is None:
             self._cached_block_mask = create_block_mask(
@@ -138,8 +140,7 @@ class Temporal_Brain_Layer(nn.Module):
             # Now the Softmax forces the 25 joints to sum to 1.0 (100%) without the CEO stealing 95% of it!
             spatial_probs = torch.softmax(spatial_scores, dim=-1)
             
-            # Average across the 4 heads (No need to slice [:25] anymore, it's already 25!)
-            spatial_attention = spatial_probs.mean(dim=1).squeeze(1) 
+            spatial_attention = spatial_probs.max(dim=1).values.squeeze(1) 
             spatial_attention = spatial_attention.view(B_M, T, 25) 
             # ----------------------------------
             

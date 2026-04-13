@@ -35,6 +35,8 @@ NTU_CLASSES = [
 # ==========================================
 NPY_DIR = "results/xai_npy"
 GIF_DIR = "results/xai_gifs"
+FRAME_DIR = 'results/xai_frames'
+
 os.makedirs(NPY_DIR, exist_ok=True)
 os.makedirs(GIF_DIR, exist_ok=True)
 
@@ -104,6 +106,41 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         transformer_input = torch.cat([gcn_features, global_node.expand(B*M, T, 1, 64)], dim=2)
         attn_output, attention_matrix = transformer(transformer_input, return_attention=True)
         
+        # ==========================================
+        # DIAGNOSTIC PRINT: EXPOSING THE AI'S BRAIN
+        # ==========================================
+        raw_probs = attention_matrix[0].cpu().numpy() 
+        
+        # 1. Find the Peak Action Frame
+        peak_frame = np.argmax(np.max(raw_probs, axis=1))
+        peak_attention = raw_probs[peak_frame]
+        
+        # 2. Find the "Resting" Frame (The frame the AI cared about the LEAST)
+        resting_frame = np.argmin(np.max(raw_probs, axis=1))
+        resting_attention = raw_probs[resting_frame]
+        
+        # 3. DIFFERENTIAL XAI: Subtract the resting baseline!
+        dynamic_attention = peak_attention - resting_attention
+        
+        # Optional: Zero out negative values (joints that the AI stopped caring about)
+        dynamic_attention = np.maximum(dynamic_attention, 0)
+        
+        # --- FIND THE TRUE #1 JOINT (DYNAMICALLY) ---
+        true_max_joint = np.argmax(dynamic_attention)
+        
+        print("\n" + "="*40)
+        print(f"DIFFERENTIAL XAI: Peak Frame {peak_frame} vs Resting Frame {resting_frame}")
+        print(f"ACTIVITY: {NTU_CLASSES[true_label.item()]}")
+        print("="*40)
+        print(f"TRUE #1 DYNAMIC JOINT: Joint {true_max_joint} (+{dynamic_attention[true_max_joint]:.6f} shift)")
+        print("-" * 40)
+        print(f"Head (Joint 3) Shift:             +{dynamic_attention[3]:.6f}")
+        print(f"Right Hand (Joint 24) Shift:      +{dynamic_attention[24]:.6f}")
+        print(f"Left Foot (Joint 15) Shift:       +{dynamic_attention[15]:.6f}")
+        print(f"Spine Base (Joint 0) Shift:       +{dynamic_attention[0]:.6f}")
+        print("="*40 + "\n")
+        # ==========================================
+
         separated_bodies = attn_output.view(B, M, 64)
         video_representation, _ = torch.max(separated_bodies, dim=1) 
         predictions = classifier(video_representation)
@@ -210,11 +247,26 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
                         continue
                     ax.plot([xs[j1], xs[j2]], [zs[j1], zs[j2]], [ys[j1], ys[j2]], c='black', linewidth=2, zorder=1)
 
+        # ==========================================
+        # NEW CODE: SAVE THE PEAK ACTION FRAME PNG
+        # ==========================================
+        # Find the parent results directory based on where the GIF is saving
+        os.makedirs(FRAME_DIR, exist_ok=True)
+        
+        # Build the filename (e.g., A001_peak_frame_47.png)
+        base_name = os.path.basename(gif_path).replace('.gif', '')
+        png_filename = f"{base_name}_peak_frame_{peak_frame}.png"
+        png_path = os.path.join(FRAME_DIR, png_filename)
+        
+        # Force the plot to draw the exact peak frame, then save it
+        update(peak_frame)
+        plt.savefig(png_path, bbox_inches='tight', dpi=300, facecolor='white')
+        # ==========================================
+
         # Disable printing inside the loop so it doesn't break the progress bar
         ani = animation.FuncAnimation(fig, update, frames=actual_frames, interval=50)
         ani.save(gif_path, writer='pillow', fps=20)
         
-        # CRITICAL: Close the figure to prevent RAM memory leaks!
-        plt.close(fig) 
+        plt.close(fig)
 
 print("Batch Processing Complete! Check the 'results/xai_npy' and 'results/xai_gifs' folders.")

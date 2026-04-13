@@ -34,10 +34,14 @@ NTU_CLASSES = [
 # 0. SETUP DIRECTORIES
 # ==========================================
 NPY_DIR = "results/xai_npy"
+RAW_NPY_DIR = "results/xai_raw_npy"
+DIFF_NPY_DIR = "results/xai_diff_npy"
 GIF_DIR = "results/xai_gifs"
 FRAME_DIR = 'results/xai_frames'
 
 os.makedirs(NPY_DIR, exist_ok=True)
+os.makedirs(RAW_NPY_DIR, exist_ok=True)
+os.makedirs(DIFF_NPY_DIR, exist_ok=True)
 os.makedirs(GIF_DIR, exist_ok=True)
 
 # ==========================================
@@ -88,10 +92,12 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
     target_base = dataset.file_list[file_idx].replace('.pt', '')
     
     npy_path = os.path.join(NPY_DIR, f"{target_base}.npy")
+    raw_npy_path = os.path.join(RAW_NPY_DIR, f"{target_base}.npy")
+    diff_npy_path = os.path.join(DIFF_NPY_DIR, f"{target_base}.npy")
     gif_path = os.path.join(GIF_DIR, f"{target_base}.gif")
     
     # SMART RESUME: Skip if both files already exist
-    if os.path.exists(npy_path) and os.path.exists(gif_path):
+    if os.path.exists(npy_path) and os.path.exists(raw_npy_path) and os.path.exists(diff_npy_path) and os.path.exists(gif_path):
         continue
 
     # --- A. RUN INFERENCE ---
@@ -109,18 +115,20 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         # ==========================================
         # DIAGNOSTIC PRINT: EXPOSING THE AI'S BRAIN
         # ==========================================
-        raw_probs = attention_matrix[0].cpu().numpy() 
+        raw_probs = attention_matrix[0].cpu().numpy()
         
         # 1. Find the Peak Action Frame
-        peak_frame = np.argmax(np.max(raw_probs, axis=1))
-        peak_attention = raw_probs[peak_frame]
+        raw_peak_frame = np.argmax(np.max(raw_probs, axis=1))
+        peak_attention = raw_probs[raw_peak_frame]
         
         # 2. Find the "Resting" Frame (The frame the AI cared about the LEAST)
         resting_frame = np.argmin(np.max(raw_probs, axis=1))
         resting_attention = raw_probs[resting_frame]
         
         # 3. DIFFERENTIAL XAI: Subtract the resting baseline!
-        dynamic_attention = peak_attention - resting_attention
+        differential_matrix = np.maximum(raw_probs - resting_attention[np.newaxis, :], 0)
+        peak_frame = np.argmax(np.max(differential_matrix, axis=1))
+        dynamic_attention = differential_matrix[peak_frame]
         
         # Optional: Zero out negative values (joints that the AI stopped caring about)
         dynamic_attention = np.maximum(dynamic_attention, 0)
@@ -130,6 +138,7 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         
         print("\n" + "="*40)
         print(f"DIFFERENTIAL XAI: Peak Frame {peak_frame} vs Resting Frame {resting_frame}")
+        print(f"RAW BIAS PEAK FRAME: {raw_peak_frame}")
         print(f"ACTIVITY: {NTU_CLASSES[true_label.item()]}")
         print("="*40)
         print(f"TRUE #1 DYNAMIC JOINT: Joint {true_max_joint} (+{dynamic_attention[true_max_joint]:.6f} shift)")
@@ -150,11 +159,17 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         pred_confidence = pred_prob.item() * 100
 
     raw_attention = attention_matrix[0].cpu().numpy()
-    heat_scores_100 = extract_xai_red_dots(raw_attention)
+    raw_heat_scores_100 = extract_xai_red_dots(raw_attention)
+    differential_attention = np.maximum(raw_attention - raw_attention[resting_frame][np.newaxis, :], 0)
+    diff_heat_scores_100 = extract_xai_red_dots(differential_attention)
 
     # Save NPY
     if not os.path.exists(npy_path):
-        np.save(npy_path, heat_scores_100)
+        np.save(npy_path, raw_heat_scores_100)
+    if not os.path.exists(raw_npy_path):
+        np.save(raw_npy_path, raw_heat_scores_100)
+    if not os.path.exists(diff_npy_path):
+        np.save(diff_npy_path, diff_heat_scores_100)
 
     # --- B. RENDER GIF ---
     if not os.path.exists(gif_path):

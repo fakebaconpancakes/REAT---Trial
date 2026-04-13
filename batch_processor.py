@@ -117,28 +117,26 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         # ==========================================
         raw_probs = attention_matrix[0].cpu().numpy()
         
-        # 1. Find the Peak Action Frame
+        # 1. Find the Raw Bias Peak Frame
         raw_peak_frame = np.argmax(np.max(raw_probs, axis=1))
-        peak_attention = raw_probs[raw_peak_frame]
         
         # 2. Find the "Resting" Frame (The frame the AI cared about the LEAST)
         resting_frame = np.argmin(np.max(raw_probs, axis=1))
         resting_attention = raw_probs[resting_frame]
         
-        # 3. DIFFERENTIAL XAI: Subtract the resting baseline!
-        differential_matrix = np.maximum(raw_probs - resting_attention[np.newaxis, :], 0)
-        peak_frame = np.argmax(np.max(differential_matrix, axis=1))
-        dynamic_attention = differential_matrix[peak_frame]
-        
-        # Optional: Zero out negative values (joints that the AI stopped caring about)
-        dynamic_attention = np.maximum(dynamic_attention, 0)
+        # 3. RELATIVE DIFFERENTIAL XAI (Fold Change Normalization)
+        # We add epsilon to prevent dividing by absolute zero
+        epsilon = 1e-6
+        differential_matrix = np.maximum((raw_probs - resting_attention[np.newaxis, :]) / (resting_attention[np.newaxis, :] + epsilon), 0)
+        diff_peak_frame = np.argmax(np.max(differential_matrix, axis=1))
+        dynamic_attention = differential_matrix[diff_peak_frame]
         
         # --- FIND THE TRUE #1 JOINT (DYNAMICALLY) ---
         true_max_joint = np.argmax(dynamic_attention)
         
         print("\n" + "="*40)
-        print(f"DIFFERENTIAL XAI: Peak Frame {peak_frame} vs Resting Frame {resting_frame}")
         print(f"RAW BIAS PEAK FRAME: {raw_peak_frame}")
+        print(f"DIFFERENTIAL PEAK FRAME: {diff_peak_frame}")
         print(f"ACTIVITY: {NTU_CLASSES[true_label.item()]}")
         print("="*40)
         print(f"TRUE #1 DYNAMIC JOINT: Joint {true_max_joint} (+{dynamic_attention[true_max_joint]:.6f} shift)")
@@ -160,7 +158,9 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
 
     raw_attention = attention_matrix[0].cpu().numpy()
     raw_heat_scores_100 = extract_xai_red_dots(raw_attention)
-    differential_attention = np.maximum(raw_attention - raw_attention[resting_frame][np.newaxis, :], 0)
+    epsilon = 1e-6
+    resting_array = raw_attention[resting_frame][np.newaxis, :]
+    differential_attention = np.maximum((raw_attention - resting_array) / (resting_array + epsilon), 0)
     diff_heat_scores_100 = extract_xai_red_dots(differential_attention)
 
     # Save NPY
@@ -270,11 +270,11 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         
         # Build the filename (e.g., A001_peak_frame_47.png)
         base_name = os.path.basename(gif_path).replace('.gif', '')
-        png_filename = f"{base_name}_peak_frame_{peak_frame}.png"
+        png_filename = f"{base_name}_peak_frame_{diff_peak_frame}.png"
         png_path = os.path.join(FRAME_DIR, png_filename)
         
         # Force the plot to draw the exact peak frame, then save it
-        update(peak_frame)
+        update(diff_peak_frame)
         plt.savefig(png_path, bbox_inches='tight', dpi=300, facecolor='white')
         # ==========================================
 

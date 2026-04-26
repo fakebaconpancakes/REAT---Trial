@@ -12,3 +12,4 @@ dashboard/
 build_dashboard_data.py
 evaluate.py
 visualization_gif.py
+docs/

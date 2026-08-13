@@ -15,16 +15,23 @@ class REAT_Model(nn.Module):
     def __init__(self):
         super().__init__()
         self.gcn = Spatial_GCN_Layer(in_channels=9, out_channels=64)
-        self.transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100)
+        # Updated to include max_bodies for the new Body Positional Embeddings
+        self.transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100, max_bodies=2)
 
     def forward(self, x):
-        # x shape: (Batch, Time, Bodies, Joints, Channels)
-        B, T, M, V, C = x.shape
-        gcn_input = x.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C)
+        # x shape: (B, M, T, V, C) -> The new Decoupled Shape
+        B, M, T, V, C = x.shape
+        
+        # The Folding Trick
+        gcn_input = x.reshape(B * M, T, V, C)
         gcn_features = self.gcn(gcn_input)
-        global_node = self.transformer.global_node.expand(B * M, T, 1, 64)
-        transformer_input = torch.cat([gcn_features, global_node], dim=2)
-        return self.transformer(transformer_input)
+        
+        frames = gcn_features.shape[1]
+        global_node_expanded = self.transformer.global_node.expand(B * M, frames, 1, 64)
+        transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
+        
+        # The Interaction Call (passing B and M natively)
+        return self.transformer(transformer_input, B, M)
 
 
 def count_trainable_params(model):
@@ -55,8 +62,8 @@ def _spatial_mask_pairs(room_map, global_idx):
 
 
 def estimate_reat_macs(model, x_shape):
-    # x_shape: (B, T, M, V, C)
-    B, T, M, V, C = x_shape
+    # x_shape: (B, M, T, V, C)
+    B, M, T, V, C = x_shape
     E = model.transformer.embed_dim
     H = model.transformer.num_heads
     S = V + 1  # 25 joints + 1 global node
@@ -66,28 +73,33 @@ def estimate_reat_macs(model, x_shape):
     # ---- Spatial GCN ----
     tokens_gcn = B_M * T * V
     macs_gcn_linear = _linear_macs(tokens_gcn, C, E)
-    # einsum('btjc,jk->btkc'): for each output (b,t,k,c) sum over j in V
     macs_gcn_einsum = B_M * T * V * E * V
 
     # ---- Temporal Brain / Spatial block ----
+    # Spatial Block processes bodies INDEPENDENTLY (Batch * Bodies)
     tokens_spatial = B_M * T * S
     macs_spatial_qkv = _linear_macs(tokens_spatial, E, 3 * E)
 
     mask_pairs_per_frame_head = _spatial_mask_pairs(
         model.transformer.room_map, model.transformer.global_node_idx
     )
-    # QK^T + Attn*V under the sparse anatomical mask
     macs_spatial_attn = B_M * T * H * mask_pairs_per_frame_head * (2 * d)
 
     macs_spatial_out = _linear_macs(tokens_spatial, E, E)
     macs_spatial_ffn = _ffn_macs(tokens_spatial, E, expansion=4)
 
-    # ---- Temporal block ----
-    L = T + 1  # +1 for video token
-    tokens_temporal = B_M * L
+    # ---- Temporal block (UPDATED FOR INTERACTION SEQUENCE) ----
+    # Temporal block processes bodies TOGETHER in one flattened sequence.
+    # New sequence length = (Bodies * Frames) + 1 Video CEO Token
+    L = (M * T) + 1  
+    tokens_temporal = B * L 
+    
     macs_temporal_qkv = _linear_macs(tokens_temporal, E, 3 * E)
+    
+    # Attention scales quadratically with sequence length: L * L
     dense_pairs = L * L
-    macs_temporal_attn = B_M * H * dense_pairs * (2 * d)
+    macs_temporal_attn = B * H * dense_pairs * (2 * d)
+    
     macs_temporal_out = _linear_macs(tokens_temporal, E, E)
     macs_temporal_ffn = _ffn_macs(tokens_temporal, E, expansion=4)
 
@@ -126,8 +138,8 @@ def main():
     print(f"Building REAT Profiler on {device}...")
     model = REAT_Model().to(device)
 
-    # (Batch=1, Time=100, Bodies=2, Joints=25, Channels=9)
-    input_shape = (1, 100, 2, 25, 9)
+    # Updated Dummy Shape: (Batch=1, Bodies=2, Time=100, Joints=25, Channels=9)
+    input_shape = (1, 2, 100, 25, 9)
     dummy_input = torch.randn(*input_shape).to(device)
 
     print("Calculating analytic MACs and exact trainable parameters...")

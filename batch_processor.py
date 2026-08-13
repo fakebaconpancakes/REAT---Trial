@@ -106,37 +106,48 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
     global_node = transformer.global_node
 
     with torch.no_grad():
-        B, T, M, V, C = tensor_input.shape
-        gcn_input = tensor_input.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C)
+        B, M, T, V, C = tensor_input.shape
+        gcn_input = tensor_input.reshape(B * M, T, V, C)
         gcn_features = gcn(gcn_input)
-        transformer_input = torch.cat([gcn_features, global_node.expand(B*M, T, 1, 64)], dim=2)
-        attn_output, attention_matrix = transformer(transformer_input, return_attention=True)
+
+        frames = gcn_features.shape[1]
+        transformer_input = torch.cat([gcn_features, global_node.expand(B * M, frames, 1, 64)], dim=2)
+
+        video_representation, attention_matrix = transformer(
+            transformer_input, B, M, body_mask=body_mask, return_attention=True
+        )
         
         # ==========================================
         # DIAGNOSTIC PRINT: EXPOSING THE AI'S BRAIN
         # ==========================================
         raw_probs = attention_matrix[0].cpu().numpy()
         
-        # 1. Find the Raw Bias Peak Frame
-        raw_peak_frame = np.argmax(np.max(raw_probs, axis=1))
+        # 1. Find max attention per frame (collapsed across bodies and joints)
+        frame_max = np.max(raw_probs, axis=(0, 2)) # Shape: (T,)
         
-        # 2. Find the "Resting" Frame (The frame the AI cared about the LEAST)
-        resting_frame = np.argmin(np.max(raw_probs, axis=1))
-        resting_attention = raw_probs[resting_frame]
+        # 2. Find the Raw Bias Peak Frame and Resting Frame
+        raw_peak_frame = np.argmax(frame_max)
+        resting_frame = np.argmin(frame_max)
+
+        # Get the resting attention specifically for both bodies at that frame -> Shape: (M, 25)
+        resting_attention = raw_probs[:, resting_frame, :]
+        resting_attention_expanded = resting_attention[:, np.newaxis, :] # Shape: (M, 1, 25)
         
         # 3. RELATIVE DIFFERENTIAL XAI (Fold Change Normalization)
         # We add epsilon to prevent dividing by absolute zero
         epsilon = 1e-6
-        differential_matrix = np.maximum((raw_probs - resting_attention[np.newaxis, :]) / (resting_attention[np.newaxis, :] + epsilon), 0)
-        diff_peak_frame = np.argmax(np.max(differential_matrix, axis=1))
-        dynamic_attention = differential_matrix[diff_peak_frame]
+        differential_matrix = np.maximum((raw_probs - resting_attention_expanded) / (resting_attention_expanded + epsilon), 0)
+
+        # Get exact coordinates (Body, Frame, Joint) of the peak shift
+        diff_peak_body, diff_peak_frame, true_max_joint = np.unravel_index(np.argmax(differential_matrix), differential_matrix.shape)
         
-        # --- FIND THE TRUE #1 JOINT (DYNAMICALLY) ---
-        true_max_joint = np.argmax(dynamic_attention)
+        # Get the attention profile for that specific body at that specific peak frame
+        dynamic_attention = differential_matrix[diff_peak_body, diff_peak_frame]
         
         print("\n" + "="*40)
         print(f"RAW BIAS PEAK FRAME: {raw_peak_frame}")
         print(f"DIFFERENTIAL PEAK FRAME: {diff_peak_frame}")
+        print(f"DIFFERENTIAL PEAK BODY: Person {diff_peak_body + 1}")
         print(f"ACTIVITY: {NTU_CLASSES[true_label.item()]}")
         print("="*40)
         print(f"TRUE #1 DYNAMIC JOINT: Joint {true_max_joint} (+{dynamic_attention[true_max_joint]:.6f} shift)")
@@ -148,20 +159,15 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         print("="*40 + "\n")
         # ==========================================
 
-        separated_bodies = attn_output.view(B, M, 64)
-        video_representation, _ = torch.max(separated_bodies, dim=1) 
         predictions = classifier(video_representation)
         probs = torch.nn.functional.softmax(predictions, dim=1)
         pred_prob, predicted_class = torch.max(probs, 1)
         pred_label = predicted_class.item()
         pred_confidence = pred_prob.item() * 100
 
-    raw_attention = attention_matrix[0].cpu().numpy()
-    raw_heat_scores_100 = extract_xai_red_dots(raw_attention)
-    epsilon = 1e-6
-    resting_array = raw_attention[resting_frame][np.newaxis, :]
-    differential_attention = np.maximum((raw_attention - resting_array) / (resting_array + epsilon), 0)
-    diff_heat_scores_100 = extract_xai_red_dots(differential_attention)
+    # Save NPY maps
+    raw_heat_scores_100 = extract_xai_red_dots(raw_probs)
+    diff_heat_scores_100 = extract_xai_red_dots(differential_matrix)
 
     # Save NPY
     if not os.path.exists(npy_path):
@@ -186,7 +192,7 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         
         # 1. SMART TIME-WARPING (Fixes the >100 frames crash)
         # Process BOTH bodies into the XAI scale!
-        full_heat_scores_100 = extract_xai_red_dots(attention_matrix.cpu().numpy()) # (2, 100, 25)
+        full_heat_scores_100 = extract_xai_red_dots(attention_matrix[0].cpu().numpy()) # (2, 100, 25)
         
         if actual_frames > 100:
             indices = np.linspace(0, 99, actual_frames).astype(int)

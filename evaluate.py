@@ -46,12 +46,13 @@ saved_xai = False
 
 loop = tqdm(val_dataloader, total=len(val_dataloader), leave=True, desc="Evaluating")
 with torch.no_grad():
-    for batch_idx, (batched_data, labels) in enumerate(loop):
+    for batch_idx, (batched_data, body_mask, labels) in enumerate(loop):
         batched_data = batched_data.to(device)
+        body_mask = body_mask.to(device)
         labels = labels.to(device)
 
-        B, T, M, V, C = batched_data.shape
-        gcn_input = batched_data.permute(0, 2, 1, 3, 4).reshape(-1, T, V, C)
+        B, M, T, V, C = batched_data.shape
+        gcn_input = batched_data.reshape(B * M, T, V, C)
 
         # Forward Pass
         gcn_features = gcn(gcn_input)
@@ -59,10 +60,10 @@ with torch.no_grad():
         global_node_expanded = global_node.expand(B*M, frames, 1, 64)
         transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
     
-        attn_output, real_attention_matrix = transformer(transformer_input, return_attention=True)
-
-        separated_bodies = attn_output.view(B, M, 64)
-        video_representation, _ = torch.max(separated_bodies, dim=1) 
+        # The Interaction Call
+        video_representation, real_attention_matrix = transformer(
+            transformer_input, B, M, body_mask=body_mask, return_attention=True
+        )
         
         predictions = classifier(video_representation)
         

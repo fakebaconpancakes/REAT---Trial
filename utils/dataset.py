@@ -97,4 +97,18 @@ class NTUSkeletonDataset(Dataset):
         tensor_data = torch.tensor(standardized_tensor, dtype=torch.float32)
         engineered_data = engineer_physics_features(tensor_data)
 
-        return engineered_data, torch.tensor(action_label, dtype=torch.long)
+        # Decoupled Body
+
+        # 1. Permute to (Bodies, Time, Joints, Channels)
+        engineered_data = engineered_data.permute(1, 0, 2, 3) # (Bodies=2, Time=100, Joints=25, Channels=9)
+
+        # 2. Ghost Mask for Temporal Transformer
+        M  = engineered_data.shape[0]
+        body_mask = torch.ones(M, dtype=torch.bool)
+
+        for m in range(M):
+            # if the body has any kinetic variance mark it as False (not ghost)
+            if torch.sum(torch.abs(engineered_data[m])) > 1e-4:
+                body_mask[m] = False
+
+        return engineered_data, body_mask, torch.tensor(action_label, dtype=torch.long)

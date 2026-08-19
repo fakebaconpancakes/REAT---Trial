@@ -14,9 +14,9 @@ from models.temporal_brain import Temporal_Brain_Layer
 class REAT_Model(nn.Module):
     def __init__(self):
         super().__init__()
-        self.gcn = Spatial_GCN_Layer(in_channels=9, out_channels=64)
+        self.gcn = Spatial_GCN_Layer(in_channels=9, out_channels=128)
         # Updated to include max_bodies for the new Body Positional Embeddings
-        self.transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100, max_bodies=2)
+        self.transformer = Temporal_Brain_Layer(embed_dim=128, num_heads=4, max_frames=100, max_bodies=2)
 
     def forward(self, x):
         # x shape: (B, M, T, V, C) -> The new Decoupled Shape
@@ -27,7 +27,7 @@ class REAT_Model(nn.Module):
         gcn_features = self.gcn(gcn_input)
         
         frames = gcn_features.shape[1]
-        global_node_expanded = self.transformer.global_node.expand(B * M, frames, 1, 64)
+        global_node_expanded = self.transformer.global_node.expand(B * M, frames, 1, 128)
         transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
         
         # The Interaction Call (passing B and M natively)

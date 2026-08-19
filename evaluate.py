@@ -24,9 +24,9 @@ val_dataset = NTUSkeletonDataset(data_folder=VAL_DIR,max_frames=100)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
 # 3. Model
-gcn = Spatial_GCN_Layer().to(device)
-transformer = Temporal_Brain_Layer().to(device)
-classifier = nn.Linear(64, NUM_CLASSES).to(device)
+gcn = Spatial_GCN_Layer(in_channels=9, out_channels=128).to(device)
+transformer = Temporal_Brain_Layer(embed_dim=128, num_heads=4, max_frames=100, max_bodies=2).to(device)
+classifier = nn.Linear(128, NUM_CLASSES).to(device)
 
 gcn.load_state_dict(torch.load('saved_weights/best_gcn.pth', map_location=device, weights_only=True))
 transformer.load_state_dict(torch.load('saved_weights/best_transformer.pth', map_location=device, weights_only=True))

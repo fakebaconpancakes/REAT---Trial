@@ -13,8 +13,8 @@ from utils.dataset import NTUSkeletonDataset
 # =====================
 # 1. HYPERPARAMETERS
 # =====================
-DATA_DIR = 'data/train_skeletons' #CHANGE THIS DIRECTORY!!!
-VAL_DIR = 'data/val_skeletons'
+DATA_DIR = 'data/xsub/train_skeletons' #CHANGE THIS DIRECTORY!!!
+VAL_DIR = 'data/xsub/val_skeletons'
 BATCH_SIZE = 64
 EPOCHS = 100
 LEARNING_RATE = 0.001
@@ -24,7 +24,7 @@ NUM_CLASSES = 60
 if __name__ == '__main__':
     wandb.init(
         project="HAR-REAT",
-        name="Run11-Decoupled-Bodies",
+        name="Run13-128-Decoupled-Bodies",
         config={
             "learning_rate": LEARNING_RATE,
             "weight_decay": WEIGHT_DECAY,
@@ -51,12 +51,12 @@ if __name__ == '__main__':
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
 
     # The Neural Networks
-    gcn = Spatial_GCN_Layer().to(device)
-    transformer = Temporal_Brain_Layer().to(device)
+    gcn = Spatial_GCN_Layer(in_channels=9, out_channels=128).to(device)
+    transformer = Temporal_Brain_Layer(embed_dim=128, num_heads=4, max_frames=100, max_bodies=2).to(device)
     global_node = transformer.global_node
 
     # The Classifier
-    classifier = nn.Linear(64, NUM_CLASSES).to(device)
+    classifier = nn.Linear(128, NUM_CLASSES).to(device)
 
     wandb.watch(gcn, log="all", log_freq=10)
     wandb.watch(transformer, log="all", log_freq=10)
@@ -111,7 +111,7 @@ if __name__ == '__main__':
 
             # 2. Attach Global Node
             frames = gcn_features.shape[1]
-            global_node_expanded = global_node.expand(B*M, frames, 1, 64)
+            global_node_expanded = global_node.expand(B*M, frames, 1, 128)
             transformer_input = torch.cat([gcn_features, global_node_expanded], dim=2)
 
             # 3. Forward Pass (Transformer)
@@ -160,7 +160,7 @@ if __name__ == '__main__':
                 v_gcn_feat = gcn(val_gcn_input)
                 
                 v_frames = v_gcn_feat.shape[1]
-                v_global_node = global_node.expand(v_B*v_M, v_frames, 1, 64)
+                v_global_node = global_node.expand(v_B*v_M, v_frames, 1, 128)
                 v_transformer_input = torch.cat([v_gcn_feat, v_global_node], dim=2)
 
                 # Validation Intercation Call

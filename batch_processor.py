@@ -12,6 +12,7 @@ from models.spatial_gcn import Spatial_GCN_Layer
 from models.temporal_brain import Temporal_Brain_Layer
 from utils.dataset import NTUSkeletonDataset
 from utils.xai_extractor import extract_xai_red_dots
+from train import NUM_CLASSES
 
 NTU_CLASSES = [
     'drink water', 'eat meal/snack', 'brushing teeth', 'brushing hair', 'drop', 'pickup',
@@ -49,9 +50,9 @@ os.makedirs(GIF_DIR, exist_ok=True)
 # ==========================================
 device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
 print(f"Loading Architecture on {device}...")
-gcn = Spatial_GCN_Layer(in_channels=9, out_channels=64).to(device)
-transformer = Temporal_Brain_Layer(embed_dim=64, num_heads=4, max_frames=100).to(device)
-classifier = nn.Linear(64, 60).to(device)
+gcn = Spatial_GCN_Layer(in_channels=9, out_channels=128).to(device)
+transformer = Temporal_Brain_Layer(embed_dim=128, num_heads=4, max_frames=100, max_bodies=2).to(device)
+classifier = nn.Linear(128, NUM_CLASSES).to(device)
 
 gcn.load_state_dict(torch.load('saved_weights/best_gcn.pth', map_location=device, weights_only=True))
 transformer.load_state_dict(torch.load('saved_weights/best_transformer.pth', map_location=device, weights_only=True))
@@ -111,7 +112,7 @@ for file_idx in tqdm(range(start_idx, end_idx), desc="Processing XAI"):
         gcn_features = gcn(gcn_input)
 
         frames = gcn_features.shape[1]
-        transformer_input = torch.cat([gcn_features, global_node.expand(B * M, frames, 1, 64)], dim=2)
+        transformer_input = torch.cat([gcn_features, global_node.expand(B * M, frames, 1, 128)], dim=2)
 
         video_representation, attention_matrix = transformer(
             transformer_input, B, M, body_mask=body_mask, return_attention=True

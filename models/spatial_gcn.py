@@ -46,6 +46,8 @@ class Spatial_GCN_Layer(nn.Module):
         self.dropout = nn.Dropout(p=0.2)
         biological_matrix = get_normalized_biological_matrix(num_joints)
         self.register_buffer('adj_matrix', biological_matrix)
+
+        self.edge_scale = nn.Parameter(torch.ones(1)) # Learnable volume knob for the biological connections
     
     def forward(self,x):
         # x -> has an input shape of (Batch, Time, Joints, Channels)
@@ -53,8 +55,12 @@ class Spatial_GCN_Layer(nn.Module):
         #Step A: Expand the features -> e.g 3 channels to 64 channels
         x_proj = self.linear(x)
 
+        # NEW: Scale the frozen adjacency matrix dynamically
+        # Zeros remain absolute zeros, while ones scale up or down
+        scaled_adj = self.adj_matrix * self.edge_scale 
+
         #Step B: The Graph Convolution (Message Passing)
-        out = torch.einsum('btjc, jk -> btkc', x_proj, self.adj_matrix)
+        out = torch.einsum('btjc, jk -> btkc', x_proj, scaled_adj)
 
         #Step C: The Residual Connection + Norm
         out = self.norm(out + x_proj)

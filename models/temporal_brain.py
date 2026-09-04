@@ -127,11 +127,32 @@ class Temporal_Brain_Layer(nn.Module):
         else:
             key_padding_mask = None
 
-        # 6. Temporal attention
+        # 6. Temporal attention with Sliding-Window
+        L_seq = 1 + M*T
+        window_size = 5
+
+        # A. Create a banded time matrix (T x T)
+        time_indices = torch.arange(T, device=x.device)
+        dist_matrix = torch.abs(time_indices.unsqueeze(0) - time_indices.unsqueeze(1))
+        valid_time_mask = (dist_matrix <= window_size)
+
+        # B. Tile the mask to cover both bodies (M*T x M*T)
+        valid_mt_mask = valid_time_mask.repeat(M, M)
+
+        # C. Create the additive mask (-inf blocks attention, 0.0 allows it)
+        attn_mask = torch.zeros((L_seq, L_seq), device=x.device, dtype=x.dtype)
+
+        # D. The Video CEO Token (Index 0) is already 0.0, so it natively sees everything!
+
+        # E. Apply the banded window to the sequence by blocking out the invalid pairs
+        attn_mask[1:, 1:].masked_fill_(~valid_mt_mask, float('-inf'))
+
+        # 7. Temporal attention
         x_temp_norm = self.temporal_norm1(x_temporal)
         temp_attn_out, temporal_attn_weights = self.temporal_attn(
             query=x_temp_norm, key=x_temp_norm, value=x_temp_norm, 
             key_padding_mask=key_padding_mask,
+            attn_mask=attn_mask,               # <--- NEW: The Sliding Window restricts the noise!
             need_weights=return_attention
         )
 

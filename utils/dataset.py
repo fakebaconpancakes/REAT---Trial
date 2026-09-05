@@ -61,7 +61,7 @@ def engineer_physics_features(skeleton_tensor):
     return engineered_tensor
 
 class NTUSkeletonDataset(Dataset):
-    def __init__(self, data_folder, max_frames=100):
+    def __init__(self, data_folder, max_frames=100, is_train=False):
         self.data_folder = os.path.join(data_folder, 'binary_pt') 
         self.file_list = sorted([f for f in os.listdir(self.data_folder) if f.endswith('.pt')])
         self.max_frames = max_frames

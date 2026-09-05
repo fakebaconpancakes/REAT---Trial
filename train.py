@@ -43,11 +43,11 @@ if __name__ == '__main__':
     # 2. INTIALIZATION
     # =====================
     print("Loading Dataset..")
-    dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100)
+    dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100, is_train=True)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True, persistent_workers=True)
 
     print("Loading Validation Dataset..")
-    val_dataset = NTUSkeletonDataset(data_folder=VAL_DIR, max_frames=100)
+    val_dataset = NTUSkeletonDataset(data_folder=VAL_DIR, max_frames=100, is_train=False)
     val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
 
     # The Neural Networks
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     wandb.watch(transformer, log="all", log_freq=10)
 
     # Loss
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
     optimizer = optim.AdamW(
         list(gcn.parameters()) + list(transformer.parameters()) + list(classifier.parameters()),
         lr = LEARNING_RATE,

@@ -2,6 +2,29 @@ import os
 import torch
 import numpy as np
 from torch.utils.data import Dataset
+import math
+
+def random_y_rotation(skeleton_tensor, max_degrees=15):
+    """
+    Applies a random Y-axis (vertical) rotation to the entire skeleton.
+    Input shape: (Time, Bodies, Joints, 3)
+    """
+    # 1. Pick a random angle between -max_degrees and +max_degrees
+    angle = math.radians(np.random.uniform(-max_degrees, max_degrees))
+    
+    # 2. Build the 3D Rotation Matrix for the Y-axis (Kinect's vertical axis)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    rot_matrix = np.array([
+        [cos_a,  0, sin_a],
+        [0,      1, 0    ],
+        [-sin_a, 0, cos_a]
+    ], dtype=np.float32)
+    
+    # 3. Apply the rotation to the XYZ coordinates
+    # skeleton_tensor is shape (T, M, V, 3). Matrix mutiplication on the last dim.
+    rotated_skeleton = np.dot(skeleton_tensor, rot_matrix.T)
+    return rotated_skeleton
 
 def engineer_physics_features(skeleton_tensor):
     """
@@ -42,6 +65,7 @@ class NTUSkeletonDataset(Dataset):
         self.data_folder = os.path.join(data_folder, 'binary_pt') 
         self.file_list = sorted([f for f in os.listdir(self.data_folder) if f.endswith('.pt')])
         self.max_frames = max_frames
+        self.is_train = is_train
 
     def __len__(self):
         return len(self.file_list)
@@ -93,6 +117,9 @@ class NTUSkeletonDataset(Dataset):
             standardized_tensor[:actual_frames, :, :, :] = raw_numpy
         else:
             standardized_tensor = raw_numpy[:self.max_frames, :, :, :]
+
+        if self.is_train:
+            standardized_tensor = random_y_rotation(standardized_tensor, max_degrees=17)
 
         tensor_data = torch.tensor(standardized_tensor, dtype=torch.float32)
         engineered_data = engineer_physics_features(tensor_data)

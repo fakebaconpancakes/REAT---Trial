@@ -43,7 +43,7 @@ if __name__ == '__main__':
     # 2. INTIALIZATION
     # =====================
     print("Loading Dataset..")
-    dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100, is_train=True)
+    dataset = NTUSkeletonDataset(data_folder=DATA_DIR, max_frames=100, is_train=False)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True, persistent_workers=True)
 
     print("Loading Validation Dataset..")
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     wandb.watch(transformer, log="all", log_freq=10)
 
     # Loss
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+    criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(
         list(gcn.parameters()) + list(transformer.parameters()) + list(classifier.parameters()),
         lr = LEARNING_RATE,

@@ -58,6 +58,7 @@ def engineer_physics_features(skeleton_tensor):
     # Stack: Relative (3) + Bones (3) + Velocity (3) = 9 Channels
     engineered_tensor = torch.cat([skeleton_tensor, bones, velocity], dim=-1)
 
+    # return bones
     return engineered_tensor
 
 class NTUSkeletonDataset(Dataset):

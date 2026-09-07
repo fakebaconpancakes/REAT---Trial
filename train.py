@@ -13,8 +13,8 @@ from utils.dataset import NTUSkeletonDataset
 # =====================
 # 1. HYPERPARAMETERS
 # =====================
-DATA_DIR = 'data/xsub/train_skeletons' #CHANGE THIS DIRECTORY!!!
-VAL_DIR = 'data/xsub/val_skeletons'
+DATA_DIR = 'data/xview/train_skeletons' #CHANGE THIS DIRECTORY!!!
+VAL_DIR = 'data/xview/val_skeletons'
 BATCH_SIZE = 64
 EPOCHS = 100
 LEARNING_RATE = 0.001
@@ -24,7 +24,7 @@ NUM_CLASSES = 60
 if __name__ == '__main__':
     wandb.init(
         project="HAR-REAT",
-        name="Run13-128-Decoupled-Bodies",
+        name="Run16-Temporal-Windowing-xview",
         config={
             "learning_rate": LEARNING_RATE,
             "weight_decay": WEIGHT_DECAY,
@@ -179,10 +179,10 @@ if __name__ == '__main__':
 
         if epoch_val_acc > best_val_acc:
             best_val_acc = epoch_val_acc
-            os.makedirs('saved_weights', exist_ok=True)
-            torch.save(gcn.state_dict(), 'saved_weights/best_gcn.pth')
-            torch.save(transformer.state_dict(), 'saved_weights/best_transformer.pth')
-            torch.save(classifier.state_dict(), 'saved_weights/best_classifier.pth')
+            os.makedirs('saved_weights/bones', exist_ok=True)
+            torch.save(gcn.state_dict(), 'saved_weights/bones/best_gcn.pth')
+            torch.save(transformer.state_dict(), 'saved_weights/bones/best_transformer.pth')
+            torch.save(classifier.state_dict(), 'saved_weights/bones/best_classifier.pth')
             print(f"🌟 New Best Model! Saved with Val Acc: {best_val_acc:.2f}%")
 
         # Put models back into training mode for the next epoch!
@@ -212,10 +212,10 @@ if __name__ == '__main__':
 
         # Save weights every 10 epochs
         if (epoch + 1) % 10 == 0:
-            os.makedirs('saved_weights', exist_ok=True)
-            torch.save(gcn.state_dict(), f'saved_weights/gcn_epoch_{epoch+1}.pth')
-            torch.save(transformer.state_dict(), f'saved_weights/transformer_epoch_{epoch+1}.pth')
-            torch.save(classifier.state_dict(), f'saved_weights/classifier_epoch_{epoch+1}.pth')
+            os.makedirs('saved_weights/bones', exist_ok=True)
+            torch.save(gcn.state_dict(), f'saved_weights/bones/gcn_epoch_{epoch+1}.pth')
+            torch.save(transformer.state_dict(), f'saved_weights/bones/transformer_epoch_{epoch+1}.pth')
+            torch.save(classifier.state_dict(), f'saved_weights/bones/classifier_epoch_{epoch+1}.pth')
             print(f"-> Checkpoint saved for Epoch {epoch+1}")
 
     print("Training Complete!")

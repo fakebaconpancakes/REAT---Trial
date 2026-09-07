@@ -1,0 +1,55 @@
+import os
+import shutil
+import random
+
+# Define base paths for the xview split
+BASE_VAL_DIR = 'data/xsub/val_skeletons'
+BASE_TEST_DIR = 'data/xsub/test_skeletons'
+
+# Define subfolders
+VAL_BIN = os.path.join(BASE_VAL_DIR, 'binary_pt')
+VAL_RAW = os.path.join(BASE_VAL_DIR, 'raw_text')
+
+TEST_BIN = os.path.join(BASE_TEST_DIR, 'binary_pt')
+TEST_RAW = os.path.join(BASE_TEST_DIR, 'raw_text')
+
+# Create the new test directories to match your exact structure
+os.makedirs(TEST_BIN, exist_ok=True)
+os.makedirs(TEST_RAW, exist_ok=True)
+
+# Get all the .pt files from the binary folder
+all_files = [f for f in os.listdir(VAL_BIN) if f.endswith('.pt')]
+
+# Shuffle them randomly for a pure 50/50 split
+random.seed(42)
+random.shuffle(all_files)
+
+split_idx = len(all_files) // 2
+files_to_move = all_files[split_idx:]
+
+print(f"Total validation files: {len(all_files)}")
+print(f"Moving {len(files_to_move)} files to {BASE_TEST_DIR}...")
+
+for pt_file in files_to_move:
+    # 1. Move the .pt file
+    src_bin = os.path.join(VAL_BIN, pt_file)
+    dst_bin = os.path.join(TEST_BIN, pt_file)
+    shutil.move(src_bin, dst_bin)
+    
+    # 2. Move the corresponding raw text file
+    # NTU raw files typically end in .skeleton, but we check .txt just in case
+    base_name = pt_file.replace('.pt', '')
+    
+    raw_file_skeleton = base_name + '.skeleton'
+    raw_file_txt = base_name + '.txt'
+    
+    src_raw_skeleton = os.path.join(VAL_RAW, raw_file_skeleton)
+    src_raw_txt = os.path.join(VAL_RAW, raw_file_txt)
+    
+    # Move whichever raw text format you are storing
+    if os.path.exists(src_raw_skeleton):
+        shutil.move(src_raw_skeleton, os.path.join(TEST_RAW, raw_file_skeleton))
+    elif os.path.exists(src_raw_txt):
+        shutil.move(src_raw_txt, os.path.join(TEST_RAW, raw_file_txt))
+
+print("Split complete! You now have structurally identical validation and test sets.")
